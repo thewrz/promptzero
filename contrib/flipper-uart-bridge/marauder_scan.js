@@ -3,6 +3,8 @@ let serial = require("serial");
 let MAX_AP_DETAILS = 11;
 let MAX_RESPONSE_READS = 12;
 let MAX_RESPONSE_CHARS = 4096;
+let MAX_SCAN_ACK_CHARS = 256;
+let SCAN_ACK = "Scanning for APs and Stations";
 let responseWasTruncated = false;
 let listHasMoreAPs = false;
 
@@ -140,6 +142,41 @@ function parseAPList(response, indices) {
     return sawAPRow || sawSelectionSummary;
 }
 
+function hasCommandError(response) {
+    return response.indexOf("Unknown command") >= 0 ||
+        response.indexOf("could not find command") >= 0 ||
+        response.indexOf("ERROR:") >= 0 ||
+        response.indexOf("Error:") >= 0;
+}
+
+function readScanStart() {
+    let tail = "";
+    let acknowledged = false;
+    let rejected = false;
+
+    for (let i = 0; i < 10; i++) {
+        delay(500);
+        let chunk = serial.readAny(50);
+        if (chunk === undefined || chunk.length === 0) continue;
+
+        let prefix = chunk.slice(0, 64);
+        let boundary = tail.slice(tail.length - 64, tail.length) + prefix;
+        if (chunk.indexOf(SCAN_ACK) >= 0 || boundary.indexOf(SCAN_ACK) >= 0) acknowledged = true;
+        if (hasCommandError(chunk) || hasCommandError(boundary)) rejected = true;
+
+        if (chunk.length >= MAX_SCAN_ACK_CHARS) {
+            tail = chunk.slice(chunk.length - MAX_SCAN_ACK_CHARS, chunk.length);
+        } else {
+            tail += chunk;
+            if (tail.length > MAX_SCAN_ACK_CHARS) {
+                tail = tail.slice(tail.length - MAX_SCAN_ACK_CHARS, tail.length);
+            }
+        }
+    }
+
+    return { acknowledged: acknowledged, rejected: rejected };
+}
+
 function fail(message) {
     print("ERROR: " + message);
     serial.end();
@@ -155,23 +192,38 @@ function runScan() {
 
     print("Stopping any prior Marauder operation");
     serial.write("stopscan\r\n");
-    readResponse();
+    let preflightResponse = readResponse();
     if (responseWasTruncated) {
         fail("preflight stopscan response exceeded the buffer limit");
+        return;
+    }
+    if (hasCommandError(preflightResponse)) {
+        fail("preflight stopscan was rejected");
         return;
     }
 
     print("Starting a fresh five-second AP scan");
     serial.write("scanall\r\n");
-    for (let i = 0; i < 10; i++) {
-        delay(500);
-        serial.readAny(50);
+    let scanStart = readScanStart();
+    if (scanStart.rejected || !scanStart.acknowledged) {
+        serial.write("stopscan\r\n");
+        let cleanupResponse = readResponse();
+        if (responseWasTruncated || hasCommandError(cleanupResponse)) {
+            fail("scanall was rejected and stopscan cleanup was not confirmed");
+            return;
+        }
+        fail(scanStart.rejected ? "scanall was rejected" : "scanall acknowledgement was missing");
+        return;
     }
 
     serial.write("stopscan\r\n");
-    readResponse();
+    let stopResponse = readResponse();
     if (responseWasTruncated) {
         fail("stopscan response exceeded the buffer limit");
+        return;
+    }
+    if (hasCommandError(stopResponse)) {
+        fail("stopscan was rejected");
         return;
     }
 
