@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"runtime"
 	"sync"
 	"testing"
@@ -354,6 +355,70 @@ func TestDispatchStreaming_AbortCancelsContext(t *testing.T) {
 	case <-producerSawCancel:
 	default:
 		t.Fatal("producer did not observe ctx cancellation")
+	}
+}
+
+func TestDispatchStreaming_ConsumerAbortDoesNotReturnInternalCancellation(t *testing.T) {
+	const toolName = "test_streaming_abort_ctx_error_tool"
+	t.Cleanup(func() { toolsreg.UnregisterForTest(toolName) })
+
+	toolsreg.Register(toolsreg.Spec{
+		Name:        toolName,
+		Description: "ctx-only producer returning its cancellation error",
+		Schema:      json.RawMessage(`{"type":"object"}`),
+		Risk:        risk.Low,
+		Streams:     true,
+		Handler: func(_ context.Context, _ *toolsreg.Deps, _ map[string]any) (string, error) {
+			return "", nil
+		},
+		StreamHandler: func(ctx context.Context, _ *toolsreg.Deps, _ map[string]any, sink *streaming.Sink) (string, error) {
+			defer sink.Close()
+			sink.Send([]byte("frame"))
+			<-ctx.Done()
+			return "partial-after-abort", ctx.Err()
+		},
+	})
+
+	a := &Agent{}
+	a.SetToolStreamCallback(func(streaming.Frame) bool { return false })
+
+	out, err := a.dispatch(context.Background(), toolName, map[string]any{})
+	if err != nil {
+		t.Fatalf("dispatch returned internal abort cancellation: %v", err)
+	}
+	if out != "partial-after-abort" {
+		t.Errorf("output = %q, want partial-after-abort", out)
+	}
+}
+
+func TestDispatchStreaming_ParentCancellationRemainsError(t *testing.T) {
+	const toolName = "test_streaming_parent_cancel_error_tool"
+	t.Cleanup(func() { toolsreg.UnregisterForTest(toolName) })
+
+	toolsreg.Register(toolsreg.Spec{
+		Name:        toolName,
+		Description: "producer returning parent cancellation",
+		Schema:      json.RawMessage(`{"type":"object"}`),
+		Risk:        risk.Low,
+		Streams:     true,
+		Handler: func(_ context.Context, _ *toolsreg.Deps, _ map[string]any) (string, error) {
+			return "", nil
+		},
+		StreamHandler: func(ctx context.Context, _ *toolsreg.Deps, _ map[string]any, sink *streaming.Sink) (string, error) {
+			defer sink.Close()
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	})
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a := &Agent{}
+	a.SetToolStreamCallback(func(streaming.Frame) bool { return false })
+
+	_, err := a.dispatch(parentCtx, toolName, map[string]any{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("dispatch error = %v, want context.Canceled", err)
 	}
 }
 
