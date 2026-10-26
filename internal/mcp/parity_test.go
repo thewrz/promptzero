@@ -118,6 +118,18 @@ func TestOptsFromSchema_PreservesEnumArrayRequired(t *testing.T) {
 	}
 }
 
+func TestOptsFromSchema_PreservesExplicitEmptyStringMinimum(t *testing.T) {
+	schema := []byte(`{"type":"object","properties":{"content":{"type":"string","minLength":0}}}`)
+	tool := mcp.NewTool("t", optsFromSchema(schema, []string{"content"})...)
+	raw, err := json.Marshal(tool)
+	if err != nil {
+		t.Fatalf("marshal tool: %v", err)
+	}
+	if !strings.Contains(string(raw), `"minLength":0`) {
+		t.Fatalf("MCP input schema lost explicit minLength:0: %s", raw)
+	}
+}
+
 // TestOptsFromSchema_NonStringEnumKeepsProperty ensures a non-string enum does
 // not error the whole property out (the enum is skipped, the property survives).
 func TestOptsFromSchema_NonStringEnumKeepsProperty(t *testing.T) {

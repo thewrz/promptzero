@@ -243,8 +243,9 @@ func consentDecision(level risk.Level, allowHigh, allowCritical bool) (allowed b
 // Risk consent gate: tools at risk.High are refused unless
 // PROMPTZERO_MCP_ALLOW_HIGH=1; tools at risk.Critical are refused unless
 // PROMPTZERO_MCP_ALLOW_CRITICAL=1. Denied calls are still audited.
-func (s *Server) add(name, desc string, opts []mcp.ToolOption, required []string, handler toolHandler) {
+func (s *Server) add(name, desc string, opts []mcp.ToolOption, required []string, schema []byte, handler toolHandler) {
 	level := risk.Classify(name)
+	emptyStringsAllowed := emptyStringsAllowedFromSchema(schema)
 
 	readOnly := level == risk.Low
 	destructive := level >= risk.High
@@ -270,7 +271,7 @@ func (s *Server) add(name, desc string, opts []mcp.ToolOption, required []string
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("invalid arguments: %v", err)), nil
 		}
-		if missing := missingRequired(args, required); len(missing) > 0 {
+		if missing := missingRequired(args, required, emptyStringsAllowed); len(missing) > 0 {
 			return mcp.NewToolResultError(
 				fmt.Sprintf("missing required argument(s): %s", strings.Join(missing, ", ")),
 			), nil
@@ -358,7 +359,7 @@ func decodeArgs(req mcp.CallToolRequest) (map[string]interface{}, error) {
 	return args, nil
 }
 
-func missingRequired(args map[string]interface{}, required []string) []string {
+func missingRequired(args map[string]interface{}, required []string, emptyStringsAllowed map[string]bool) []string {
 	var missing []string
 	for _, name := range required {
 		v, ok := args[name]
@@ -368,7 +369,7 @@ func missingRequired(args map[string]interface{}, required []string) []string {
 		}
 		switch t := v.(type) {
 		case string:
-			if strings.TrimSpace(t) == "" {
+			if strings.TrimSpace(t) == "" && !emptyStringsAllowed[name] {
 				missing = append(missing, name)
 			}
 		case nil:
@@ -376,6 +377,25 @@ func missingRequired(args map[string]interface{}, required []string) []string {
 		}
 	}
 	return missing
+}
+
+func emptyStringsAllowedFromSchema(schema []byte) map[string]bool {
+	var properties struct {
+		Properties map[string]struct {
+			Type      string `json:"type"`
+			MinLength *int   `json:"minLength"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schema, &properties); err != nil {
+		return nil
+	}
+	allowed := make(map[string]bool)
+	for name, property := range properties.Properties {
+		if property.Type == "string" && property.MinLength != nil && *property.MinLength == 0 {
+			allowed[name] = true
+		}
+	}
+	return allowed
 }
 
 // --- Registration: persona prompts ---
@@ -484,7 +504,7 @@ func (s *Server) registerFromRegistry() {
 		for _, name := range names {
 			specCopy := spec
 			nameCopy := name
-			s.add(nameCopy, specCopy.Description, opts, specCopy.Required,
+			s.add(nameCopy, specCopy.Description, opts, specCopy.Required, specCopy.Schema,
 				func(ctx context.Context, args map[string]interface{}) (string, error) {
 					return specCopy.Handler(ctx, s.deps(), args)
 				})
@@ -538,6 +558,7 @@ func optsFromSchema(schema []byte, required []string) []mcp.ToolOption {
 		var prop struct {
 			Type        string          `json:"type"`
 			Description string          `json:"description"`
+			MinLength   *int            `json:"minLength"`
 			Enum        json.RawMessage `json:"enum"`
 			Items       json.RawMessage `json:"items"`
 		}
@@ -546,6 +567,9 @@ func optsFromSchema(schema []byte, required []string) []mcp.ToolOption {
 		}
 		var propOpts []mcp.PropertyOption
 		propOpts = append(propOpts, mcp.Description(prop.Description))
+		if prop.Type == "string" && prop.MinLength != nil && *prop.MinLength >= 0 {
+			propOpts = append(propOpts, mcp.MinLength(*prop.MinLength))
+		}
 		if reqSet[name] {
 			propOpts = append(propOpts, mcp.Required())
 		}
