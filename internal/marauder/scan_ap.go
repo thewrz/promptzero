@@ -77,11 +77,13 @@ func (m *Marauder) collectAPScanLocked(ctx context.Context, duration time.Durati
 }
 
 func (m *Marauder) collectAPScanOutput(ctx context.Context, duration time.Duration, onLine func(string) bool, result *ScanResult, stopScan func() error) (ScanResult, error) {
-	startBody, carry, err := m.readCommandResponse(ctx, "scanall", apCommandTimeout, nil)
+	startBody, carry, startEcho, err := m.readCommandResponse(ctx, "scanall", apCommandTimeout, nil)
 	if err != nil {
 		return *result, joinScanErrors(fmt.Errorf("starting scanall: %w", err), stopScan())
 	}
-	if responseHasCommandError(startBody) || !strings.Contains(strings.ToLower(startBody), "scanning for aps and stations") {
+	hasStartMessage := strings.Contains(strings.ToLower(startBody), "scanning for aps and stations")
+	validStart := hasStartMessage || (startEcho && strings.TrimSpace(startBody) == "")
+	if responseHasCommandError(startBody) || !validStart {
 		appendRawLines(result, startBody, onLine)
 		startErr := fmt.Errorf("scanall returned unexpected response: %q", strings.TrimSpace(startBody))
 		return *result, joinScanErrors(startErr, stopScan())
@@ -234,7 +236,7 @@ func (m *Marauder) stopScanLocked() (string, error) {
 	if _, err := m.port.Write([]byte("stopscan\n")); err != nil {
 		return "", fmt.Errorf("sending stopscan: %w", err)
 	}
-	body, _, err := m.readCommandResponse(context.Background(), "stopscan", apCommandTimeout, nil)
+	body, _, _, err := m.readCommandResponse(context.Background(), "stopscan", apCommandTimeout, nil)
 	if err != nil {
 		return body, fmt.Errorf("waiting for stopscan response: %w", err)
 	}
@@ -249,36 +251,41 @@ func (m *Marauder) execScanCommand(ctx context.Context, command string, timeout 
 	if _, err := m.port.Write([]byte(command + "\n")); err != nil {
 		return "", fmt.Errorf("sending command: %w", err)
 	}
-	body, _, err := m.readCommandResponse(ctx, command, timeout, nil)
+	body, _, _, err := m.readCommandResponse(ctx, command, timeout, nil)
 	return body, err
 }
 
-func (m *Marauder) readCommandResponse(ctx context.Context, command string, timeout time.Duration, pending []byte) (string, []byte, error) {
+func (m *Marauder) readCommandResponse(ctx context.Context, command string, timeout time.Duration, pending []byte) (string, []byte, bool, error) {
 	readCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	buffer := append([]byte(nil), pending...)
 	chunk := make([]byte, 512)
 	for {
 		if start, end, ok := scanPromptBounds(buffer); ok {
-			return parseMarauderResponse(buffer[:start]), append([]byte(nil), buffer[end:]...), nil
+			return parseMarauderResponse(buffer[:start]), append([]byte(nil), buffer[end:]...), responseHasCommandEcho(buffer[:start], command), nil
 		}
 		if len(buffer) > m.accumCap() {
-			return parseMarauderResponse(buffer), nil, fmt.Errorf("%s response: %w", command, ErrResponseTruncated)
+			return parseMarauderResponse(buffer), nil, false, fmt.Errorf("%s response: %w", command, ErrResponseTruncated)
 		}
 		if err := readCtx.Err(); err != nil {
-			return parseMarauderResponse(buffer), nil, fmt.Errorf("%s response: %w", command, err)
+			return parseMarauderResponse(buffer), nil, false, fmt.Errorf("%s response: %w", command, err)
 		}
 		if err := m.port.SetReadTimeout(100 * time.Millisecond); err != nil {
-			return parseMarauderResponse(buffer), nil, fmt.Errorf("%s set read timeout: %w", command, err)
+			return parseMarauderResponse(buffer), nil, false, fmt.Errorf("%s set read timeout: %w", command, err)
 		}
 		n, err := m.port.Read(chunk)
 		if err != nil {
-			return parseMarauderResponse(buffer), nil, fmt.Errorf("%s read: %w", command, err)
+			return parseMarauderResponse(buffer), nil, false, fmt.Errorf("%s read: %w", command, err)
 		}
 		if n > 0 {
 			buffer = append(buffer, chunk[:n]...)
 		}
 	}
+}
+
+func responseHasCommandEcho(response []byte, command string) bool {
+	lines := strings.Split(strings.ReplaceAll(string(response), "\r\n", "\n"), "\n")
+	return len(lines) > 0 && strings.TrimSpace(lines[0]) == "#"+command
 }
 
 func scanPromptBounds(buffer []byte) (int, int, bool) {

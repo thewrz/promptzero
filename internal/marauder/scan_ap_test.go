@@ -84,6 +84,54 @@ func TestScanAPParsedCtx_CollectsAndEnrichesMarauder1191(t *testing.T) {
 	}
 }
 
+func TestScanAPParsedCtx_AcceptsScanallEchoOnlyPrompt(t *testing.T) {
+	port := newScanScriptPort()
+	port.startReply = "#scanall"
+	port.stopReply = "Stopping WiFi tran/recv"
+	port.listReply = "[0][CH:6] Example -54\n0 selected"
+	port.infoReply[0] = exampleDetail
+	m := NewWithPort(port)
+	t.Cleanup(func() { _ = m.Close() })
+
+	res, err := m.ScanAPParsedCtx(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("ScanAPParsedCtx with Marauder 1.19.1 echo-only start: %v", err)
+	}
+	if res.Count != 1 || res.APs[0].SSID != "Example" {
+		t.Fatalf("echo-only start result = %+v, want one enriched AP", res)
+	}
+}
+
+func TestScanAPParsedCtx_RejectsBarePromptAtScanStart(t *testing.T) {
+	port := newScanScriptPort()
+	port.bareScanPrompt = true
+	m := NewWithPort(port)
+	t.Cleanup(func() { _ = m.Close() })
+
+	_, err := m.ScanAPParsedCtx(context.Background(), time.Second)
+	if err == nil || !strings.Contains(err.Error(), "unexpected response") {
+		t.Fatalf("bare scanall prompt error = %v, want unexpected-response error", err)
+	}
+	if !containsExact(port.commands(), "stopscan") {
+		t.Errorf("bare scanall prompt did not trigger stopscan cleanup: %q", port.commands())
+	}
+}
+
+func TestScanAPParsedCtx_RejectsMalformedEchoResponseAtScanStart(t *testing.T) {
+	port := newScanScriptPort()
+	port.startReply = "#scanall\nunexpected output"
+	m := NewWithPort(port)
+	t.Cleanup(func() { _ = m.Close() })
+
+	_, err := m.ScanAPParsedCtx(context.Background(), time.Second)
+	if err == nil || !strings.Contains(err.Error(), "unexpected response") {
+		t.Fatalf("malformed scanall echo response error = %v, want unexpected-response error", err)
+	}
+	if !containsExact(port.commands(), "stopscan") {
+		t.Errorf("malformed scanall response did not trigger stopscan cleanup: %q", port.commands())
+	}
+}
+
 func TestScanAPParsedStream_CancelStopsAndReturnsStructuredResults(t *testing.T) {
 	port := newScanScriptPort()
 	port.startReply = scanAllAck
@@ -359,6 +407,7 @@ type scanScriptPort struct {
 	commandsSeen       []string
 	failCommand        string
 	startReply         string
+	bareScanPrompt     bool
 	scanLines          string
 	stopReply          string
 	listReply          string
@@ -391,7 +440,9 @@ func (p *scanScriptPort) Write(data []byte) (int, error) {
 		}
 		switch {
 		case line == "scanall":
-			if !p.suppressScanPrompt {
+			if p.bareScanPrompt {
+				p.outgoing.WriteString("> ")
+			} else if !p.suppressScanPrompt {
 				p.writeReplyLocked(p.startReply)
 			}
 			if p.scanLines != "" {
