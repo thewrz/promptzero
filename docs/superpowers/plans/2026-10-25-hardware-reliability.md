@@ -80,5 +80,5 @@
 - [ ] Back up/check installed artifacts, build fork, deploy reversible local artifacts and FAP using supported storage RPC.
 - [ ] MCP initialize/list, wifi_scan_ap structured fields, shutdown/CLI recovery, second scan session, and competing launcher test; keep radio output private.
 - [ ] Verify Flipper-only path and document single-cable Wi-Fi/core switching limitations.
-- [ ] Run task ci and added host tests; review each task and one final adversarial review per draft PR; fix findings with regression tests.
-- [ ] Update verified runbook and fallback script; create focused draft PRs against personal fork with issue links and exact validation evidence. No merge.
+- [ ] Run task ci and added host tests; review each task and the final branch; fix findings with regression tests.
+- [ ] Update verified runbook and fallback script; publish reviewable branches in the personal fork with exact validation evidence. No PR creation or merge without a separate request.

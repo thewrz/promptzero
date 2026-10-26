@@ -28,7 +28,8 @@ approach. Keep the Go module path and upstream license intact.
   this fork as maintained sources; integrate local copies with backups and
   content checks only after validation.
 - Do not publish SSIDs, BSSIDs, machine identifiers, secrets, or local paths.
-- Keep changes in focused commits and draft PRs; hardware access is serialized.
+- Keep changes in focused commits and reviewable fork branches; hardware access
+  is serialized. PR creation and merging require a separate request.
 - TDD pins behavior at transport, tool, process, and FAP policy boundaries.
 
 ## Components
