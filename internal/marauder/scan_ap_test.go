@@ -123,6 +123,27 @@ func TestScanAPParsedCtx_ContextCancellationStopsScan(t *testing.T) {
 	}
 }
 
+func TestScanAPParsedCtx_CancelDuringSilentStartupStopsScan(t *testing.T) {
+	port := newScanScriptPort()
+	port.suppressScanPrompt = true
+	m := NewWithPort(port)
+	t.Cleanup(func() { _ = m.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	start := time.Now()
+
+	_, err := m.ScanAPParsedCtx(ctx, time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("silent startup cancellation error = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("silent startup cancellation took %s, want prompt bounded cleanup", elapsed)
+	}
+	if !containsExact(port.commands(), "stopscan") {
+		t.Errorf("silent startup cancellation did not send stopscan: %q", port.commands())
+	}
+}
+
 func TestScanAPParsedCtx_ScanWriteFailureStillAttemptsStop(t *testing.T) {
 	port := newScanScriptPort()
 	port.failCommand = "scanall"
@@ -332,18 +353,19 @@ func TestScanAPParsedStream_InfoPreservesSSIDQuotes(t *testing.T) {
 // scanScriptPort models the serial boundary while keeping scan collection
 // asynchronous: scanall acknowledges immediately, then emits scan rows.
 type scanScriptPort struct {
-	mu           sync.Mutex
-	incoming     bytes.Buffer
-	outgoing     bytes.Buffer
-	commandsSeen []string
-	failCommand  string
-	startReply   string
-	scanLines    string
-	stopReply    string
-	listReply    string
-	infoReply    map[int]string
-	readTimeout  time.Duration
-	closed       bool
+	mu                 sync.Mutex
+	incoming           bytes.Buffer
+	outgoing           bytes.Buffer
+	commandsSeen       []string
+	failCommand        string
+	startReply         string
+	scanLines          string
+	stopReply          string
+	listReply          string
+	suppressScanPrompt bool
+	infoReply          map[int]string
+	readTimeout        time.Duration
+	closed             bool
 }
 
 func newScanScriptPort() *scanScriptPort {
@@ -369,7 +391,9 @@ func (p *scanScriptPort) Write(data []byte) (int, error) {
 		}
 		switch {
 		case line == "scanall":
-			p.writeReplyLocked(p.startReply)
+			if !p.suppressScanPrompt {
+				p.writeReplyLocked(p.startReply)
+			}
 			if p.scanLines != "" {
 				go func(lines string) {
 					time.Sleep(5 * time.Millisecond)

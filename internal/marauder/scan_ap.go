@@ -77,7 +77,7 @@ func (m *Marauder) collectAPScanLocked(ctx context.Context, duration time.Durati
 }
 
 func (m *Marauder) collectAPScanOutput(ctx context.Context, duration time.Duration, onLine func(string) bool, result *ScanResult, stopScan func() error) (ScanResult, error) {
-	startBody, carry, err := m.readCommandResponse(context.Background(), "scanall", apCommandTimeout, nil)
+	startBody, carry, err := m.readCommandResponse(ctx, "scanall", apCommandTimeout, nil)
 	if err != nil {
 		return *result, joinScanErrors(fmt.Errorf("starting scanall: %w", err), stopScan())
 	}
