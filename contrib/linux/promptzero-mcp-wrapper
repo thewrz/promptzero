@@ -143,7 +143,16 @@ if [ "$expect_port_value" -eq 1 ]; then
 	fail "--port requires a device path"
 fi
 
-PROMPTZERO_BIN=${PROMPTZERO_BIN:-${HOME:-}/.local/bin/promptzero}
+if [ "${PROMPTZERO_BIN+x}" = x ]; then
+	[ -n "$PROMPTZERO_BIN" ] || fail "PROMPTZERO_BIN cannot be empty"
+else
+	[ -n "${HOME:-}" ] || fail "HOME is required when PROMPTZERO_BIN is not set"
+	if [ -f "$HOME/.local/bin/promptzero-fork" ] && [ -x "$HOME/.local/bin/promptzero-fork" ]; then
+		PROMPTZERO_BIN=$HOME/.local/bin/promptzero-fork
+	else
+		PROMPTZERO_BIN=$HOME/.local/bin/promptzero
+	fi
+fi
 if [ -z "$PROMPTZERO_BIN" ] || [ ! -x "$PROMPTZERO_BIN" ]; then
 	fail "PromptZero executable '$PROMPTZERO_BIN' is missing or not executable; set PROMPTZERO_BIN"
 fi

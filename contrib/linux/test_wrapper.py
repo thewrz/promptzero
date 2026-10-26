@@ -119,6 +119,44 @@ class WrapperTests(unittest.TestCase):
         self.assertIn("executable", result.stderr)
         self.assertEqual(result.stdout, "")
 
+    def test_fork_binary_is_preferred_to_upstream_default(self) -> None:
+        home = self.root / "home-fork"
+        self._write_named_binary(home / ".local/bin/promptzero", "upstream-selected")
+        self._write_named_binary(home / ".local/bin/promptzero-fork", "fork-selected")
+        env = self.env.copy()
+        env.pop("PROMPTZERO_BIN")
+        env["HOME"] = str(home)
+
+        result = self.run_wrapper("--mcp", env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "fork-selected\n")
+
+    def test_upstream_binary_is_fallback_when_fork_is_absent(self) -> None:
+        home = self.root / "home-upstream"
+        self._write_named_binary(home / ".local/bin/promptzero", "upstream-selected")
+        env = self.env.copy()
+        env.pop("PROMPTZERO_BIN")
+        env["HOME"] = str(home)
+
+        result = self.run_wrapper("--mcp", env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "upstream-selected\n")
+
+    def test_explicit_binary_override_wins_over_both_defaults(self) -> None:
+        home = self.root / "home-explicit"
+        self._write_named_binary(home / ".local/bin/promptzero", "upstream-selected")
+        self._write_named_binary(home / ".local/bin/promptzero-fork", "fork-selected")
+        env = self.env.copy()
+        env["HOME"] = str(home)
+        env["PROMPTZERO_BIN"] = str(self.child)
+
+        result = self.run_wrapper("--mcp", env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "child-stdout\n")
+
     def test_missing_stty_dependency_has_actionable_error(self) -> None:
         isolated = self.root / "path"
         isolated.mkdir()
@@ -333,6 +371,12 @@ class WrapperTests(unittest.TestCase):
                 return
             time.sleep(0.01)
         self.fail(f"child did not create {path.name}")
+
+    @staticmethod
+    def _write_named_binary(path: pathlib.Path, output: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\n")
+        path.chmod(0o755)
 
     @staticmethod
     def _stop(process: subprocess.Popen[str]) -> None:
