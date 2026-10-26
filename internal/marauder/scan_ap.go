@@ -53,6 +53,12 @@ func (m *Marauder) scanAPParsed(ctx context.Context, duration time.Duration, onL
 
 func (m *Marauder) collectAPScanLocked(ctx context.Context, duration time.Duration, onLine func(string) bool) (ScanResult, error) {
 	result := ScanResult{}
+	if _, err := m.stopScanLockedCtx(ctx); err != nil {
+		return result, fmt.Errorf("resetting Marauder scan mode before scanall: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	command := []byte("scanall\n")
 	written, writeErr := m.port.Write(command)
 	if writeErr != nil || written != len(command) {
@@ -77,13 +83,11 @@ func (m *Marauder) collectAPScanLocked(ctx context.Context, duration time.Durati
 }
 
 func (m *Marauder) collectAPScanOutput(ctx context.Context, duration time.Duration, onLine func(string) bool, result *ScanResult, stopScan func() error) (ScanResult, error) {
-	startBody, carry, startEcho, err := m.readCommandResponse(ctx, "scanall", apCommandTimeout, nil)
+	startBody, carry, err := m.readCommandResponse(ctx, "scanall", apCommandTimeout, nil)
 	if err != nil {
 		return *result, joinScanErrors(fmt.Errorf("starting scanall: %w", err), stopScan())
 	}
-	hasStartMessage := strings.Contains(strings.ToLower(startBody), "scanning for aps and stations")
-	validStart := hasStartMessage || (startEcho && strings.TrimSpace(startBody) == "")
-	if responseHasCommandError(startBody) || !validStart {
+	if responseHasCommandError(startBody) || !strings.Contains(strings.ToLower(startBody), "scanning for aps and stations") {
 		appendRawLines(result, startBody, onLine)
 		startErr := fmt.Errorf("scanall returned unexpected response: %q", strings.TrimSpace(startBody))
 		return *result, joinScanErrors(startErr, stopScan())
@@ -233,10 +237,14 @@ func dispatchScanLine(raw string, result *ScanResult, onLine func(string) bool, 
 }
 
 func (m *Marauder) stopScanLocked() (string, error) {
+	return m.stopScanLockedCtx(context.Background())
+}
+
+func (m *Marauder) stopScanLockedCtx(ctx context.Context) (string, error) {
 	if _, err := m.port.Write([]byte("stopscan\n")); err != nil {
 		return "", fmt.Errorf("sending stopscan: %w", err)
 	}
-	body, _, _, err := m.readCommandResponse(context.Background(), "stopscan", apCommandTimeout, nil)
+	body, _, err := m.readCommandResponse(ctx, "stopscan", apCommandTimeout, nil)
 	if err != nil {
 		return body, fmt.Errorf("waiting for stopscan response: %w", err)
 	}
@@ -251,41 +259,36 @@ func (m *Marauder) execScanCommand(ctx context.Context, command string, timeout 
 	if _, err := m.port.Write([]byte(command + "\n")); err != nil {
 		return "", fmt.Errorf("sending command: %w", err)
 	}
-	body, _, _, err := m.readCommandResponse(ctx, command, timeout, nil)
+	body, _, err := m.readCommandResponse(ctx, command, timeout, nil)
 	return body, err
 }
 
-func (m *Marauder) readCommandResponse(ctx context.Context, command string, timeout time.Duration, pending []byte) (string, []byte, bool, error) {
+func (m *Marauder) readCommandResponse(ctx context.Context, command string, timeout time.Duration, pending []byte) (string, []byte, error) {
 	readCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	buffer := append([]byte(nil), pending...)
 	chunk := make([]byte, 512)
 	for {
 		if start, end, ok := scanPromptBounds(buffer); ok {
-			return parseMarauderResponse(buffer[:start]), append([]byte(nil), buffer[end:]...), responseHasCommandEcho(buffer[:start], command), nil
+			return parseMarauderResponse(buffer[:start]), append([]byte(nil), buffer[end:]...), nil
 		}
 		if len(buffer) > m.accumCap() {
-			return parseMarauderResponse(buffer), nil, false, fmt.Errorf("%s response: %w", command, ErrResponseTruncated)
+			return parseMarauderResponse(buffer), nil, fmt.Errorf("%s response: %w", command, ErrResponseTruncated)
 		}
 		if err := readCtx.Err(); err != nil {
-			return parseMarauderResponse(buffer), nil, false, fmt.Errorf("%s response: %w", command, err)
+			return parseMarauderResponse(buffer), nil, fmt.Errorf("%s response: %w", command, err)
 		}
 		if err := m.port.SetReadTimeout(100 * time.Millisecond); err != nil {
-			return parseMarauderResponse(buffer), nil, false, fmt.Errorf("%s set read timeout: %w", command, err)
+			return parseMarauderResponse(buffer), nil, fmt.Errorf("%s set read timeout: %w", command, err)
 		}
 		n, err := m.port.Read(chunk)
 		if err != nil {
-			return parseMarauderResponse(buffer), nil, false, fmt.Errorf("%s read: %w", command, err)
+			return parseMarauderResponse(buffer), nil, fmt.Errorf("%s read: %w", command, err)
 		}
 		if n > 0 {
 			buffer = append(buffer, chunk[:n]...)
 		}
 	}
-}
-
-func responseHasCommandEcho(response []byte, command string) bool {
-	lines := strings.Split(strings.ReplaceAll(string(response), "\r\n", "\n"), "\n")
-	return len(lines) > 0 && strings.TrimSpace(lines[0]) == "#"+command
 }
 
 func scanPromptBounds(buffer []byte) (int, int, bool) {

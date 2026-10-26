@@ -17,6 +17,10 @@ var (
 func parseScanAPList(raw string) (ScanResult, error) {
 	parsed := ParseAPList(raw)
 	if parsed.Count == 0 {
+		if len(parsed.RawLines) == 1 && strings.EqualFold(strings.TrimSpace(parsed.RawLines[0]), "0 selected") {
+			parsed.APs = []AccessPoint{}
+			return parsed, nil
+		}
 		return parsed, fmt.Errorf("list -a returned no parseable access points: %q", strings.TrimSpace(raw))
 	}
 	for _, line := range parsed.RawLines {

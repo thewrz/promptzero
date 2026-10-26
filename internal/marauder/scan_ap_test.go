@@ -79,26 +79,49 @@ func TestScanAPParsedCtx_CollectsAndEnrichesMarauder1191(t *testing.T) {
 		!containsExact(res.RawLines, "ESSID: AA:BB:CC:DD:EE:02") {
 		t.Errorf("raw scan/detail evidence was not retained: %q", res.RawLines)
 	}
-	if got, want := port.commands(), []string{"scanall", "stopscan", "list -a", "info -a 0", "info -a 1"}; !sameStrings(got, want) {
+	if got, want := port.commands(), []string{"stopscan", "scanall", "stopscan", "list -a", "info -a 0", "info -a 1"}; !sameStrings(got, want) {
 		t.Errorf("wire commands = %q, want %q", got, want)
 	}
 }
 
-func TestScanAPParsedCtx_AcceptsScanallEchoOnlyPrompt(t *testing.T) {
+func TestScanAPParsedCtx_RejectsScanallEchoOnlyPrompt(t *testing.T) {
 	port := newScanScriptPort()
 	port.startReply = "#scanall"
-	port.stopReply = "Stopping WiFi tran/recv"
+	m := NewWithPort(port)
+	t.Cleanup(func() { _ = m.Close() })
+
+	_, err := m.ScanAPParsedCtx(context.Background(), time.Second)
+	if err == nil || !strings.Contains(err.Error(), "unexpected response") {
+		t.Fatalf("echo-only scanall response error = %v, want unexpected-response error", err)
+	}
+	if containsExact(port.commands(), "list -a") {
+		t.Errorf("echo-only scanall response must not proceed to list -a: %q", port.commands())
+	}
+}
+
+func TestScanAPParsedCtx_ResetsInfoModeBeforeScanall(t *testing.T) {
+	port := newScanScriptPort()
+	port.strictScanMode = true
+	port.startReply = scanAllAck
+	port.scanLines = scanAllLines
 	port.listReply = "[0][CH:6] Example -54\n0 selected"
 	port.infoReply[0] = exampleDetail
 	m := NewWithPort(port)
 	t.Cleanup(func() { _ = m.Close() })
 
+	if _, err := m.ExecCtx(context.Background(), "info", time.Second); err != nil {
+		t.Fatalf("prime Marauder SHOW_INFO mode: %v", err)
+	}
 	res, err := m.ScanAPParsedCtx(context.Background(), time.Second)
 	if err != nil {
-		t.Fatalf("ScanAPParsedCtx with Marauder 1.19.1 echo-only start: %v", err)
+		t.Fatalf("ScanAPParsedCtx after info probe: %v", err)
 	}
 	if res.Count != 1 || res.APs[0].SSID != "Example" {
-		t.Fatalf("echo-only start result = %+v, want one enriched AP", res)
+		t.Fatalf("scan after mode reset = %+v, want one enriched AP", res)
+	}
+	want := []string{"info", "stopscan", "scanall", "stopscan", "list -a", "info -a 0"}
+	if got := port.commands(); !sameStrings(got, want) {
+		t.Fatalf("commands after info probe = %q, want %q", got, want)
 	}
 }
 
@@ -211,7 +234,7 @@ func TestScanAPParsedCtx_StopFailureIsSurfaced(t *testing.T) {
 	port := newScanScriptPort()
 	port.startReply = scanAllAck
 	port.scanLines = scanAllLines
-	port.stopReply = "Error: stopscan failed"
+	port.stopReplies = []string{"", "Error: stopscan failed"}
 	m := NewWithPort(port)
 	t.Cleanup(func() { _ = m.Close() })
 
@@ -221,6 +244,21 @@ func TestScanAPParsedCtx_StopFailureIsSurfaced(t *testing.T) {
 	}
 	if containsExact(port.commands(), "list -a") {
 		t.Error("list -a must not run after stopscan failed")
+	}
+}
+
+func TestScanAPParsedCtx_ModeResetFailureDoesNotStartScan(t *testing.T) {
+	port := newScanScriptPort()
+	port.stopReply = "Error: stopscan failed"
+	m := NewWithPort(port)
+	t.Cleanup(func() { _ = m.Close() })
+
+	_, err := m.ScanAPParsedCtx(context.Background(), time.Second)
+	if err == nil || !strings.Contains(err.Error(), "resetting Marauder scan mode") {
+		t.Fatalf("mode reset failure = %v, want contextual reset error", err)
+	}
+	if containsExact(port.commands(), "scanall") {
+		t.Errorf("scanall ran after failed mode reset: %q", port.commands())
 	}
 }
 
@@ -334,7 +372,7 @@ func TestClampAPScanDuration(t *testing.T) {
 }
 
 func TestScanAPParsedCtx_RejectsEmptyOrMismatchedList(t *testing.T) {
-	for _, listReply := range []string{"0 selected", "unexpected list response"} {
+	for _, listReply := range []string{"", "unexpected list response", "2 selected"} {
 		t.Run(listReply, func(t *testing.T) {
 			port := newScanScriptPort()
 			port.startReply = scanAllAck
@@ -347,6 +385,32 @@ func TestScanAPParsedCtx_RejectsEmptyOrMismatchedList(t *testing.T) {
 				t.Fatalf("list response %q returned %v, want parser mismatch error", listReply, err)
 			}
 		})
+	}
+}
+
+func TestScanAPParsedCtx_ReturnsConfirmedEmptyAPList(t *testing.T) {
+	port := newScanScriptPort()
+	port.startReply = scanAllAck
+	port.listReply = "0 selected"
+	m := NewWithPort(port)
+	t.Cleanup(func() { _ = m.Close() })
+
+	result, err := m.ScanAPParsedCtx(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("ScanAPParsedCtx with confirmed empty AP list: %v", err)
+	}
+	if result.Count != 0 || len(result.APs) != 0 || result.APs == nil {
+		t.Fatalf("empty scan result = %+v, want count 0 and initialized empty APs", result)
+	}
+}
+
+func TestParseScanAPList_AcceptsExplicitZeroAPFooter(t *testing.T) {
+	parsed, err := parseScanAPList("0 selected")
+	if err != nil {
+		t.Fatalf("parseScanAPList zero AP footer: %v", err)
+	}
+	if parsed.Count != 0 || len(parsed.APs) != 0 || parsed.APs == nil || !containsExact(parsed.RawLines, "0 selected") {
+		t.Fatalf("zero AP parse = %+v, want count 0, no APs, footer retained", parsed)
 	}
 }
 
@@ -408,8 +472,12 @@ type scanScriptPort struct {
 	failCommand        string
 	startReply         string
 	bareScanPrompt     bool
+	strictScanMode     bool
+	showInfoMode       bool
 	scanLines          string
 	stopReply          string
+	stopReplies        []string
+	stopCount          int
 	listReply          string
 	suppressScanPrompt bool
 	infoReply          map[int]string
@@ -439,20 +507,31 @@ func (p *scanScriptPort) Write(data []byte) (int, error) {
 			return 0, errors.New("scripted serial write failure")
 		}
 		switch {
+		case line == "info":
+			p.showInfoMode = true
+			p.writeReplyLocked("Firmware: Marauder")
 		case line == "scanall":
-			if p.bareScanPrompt {
+			if p.strictScanMode && p.showInfoMode {
+				p.outgoing.WriteString("#scanall\r\n> ")
+			} else if p.bareScanPrompt {
 				p.outgoing.WriteString("> ")
 			} else if !p.suppressScanPrompt {
 				p.writeReplyLocked(p.startReply)
 			}
-			if p.scanLines != "" {
+			if p.scanLines != "" && (!p.strictScanMode || !p.showInfoMode) {
 				go func(lines string) {
 					time.Sleep(5 * time.Millisecond)
 					p.push(lines + "\n")
 				}(p.scanLines)
 			}
 		case line == "stopscan":
-			p.writeReplyLocked(p.stopReply)
+			p.showInfoMode = false
+			reply := p.stopReply
+			if p.stopCount < len(p.stopReplies) {
+				reply = p.stopReplies[p.stopCount]
+			}
+			p.stopCount++
+			p.writeReplyLocked(reply)
 		case line == "list -a":
 			p.writeReplyLocked(p.listReply)
 		case strings.HasPrefix(line, "info -a "):
