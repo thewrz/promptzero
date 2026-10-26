@@ -1625,20 +1625,16 @@ func (f *Flipper) storageReadViaRPC(ctx context.Context, path string) (string, e
 	return sb.String(), nil
 }
 
-// StorageWrite writes data to a file using the write_chunk protocol.
+// StorageWrite replaces a file's contents using the write_chunk protocol.
 func (f *Flipper) StorageWrite(path string, data string) error {
 	return f.StorageWriteCtx(context.Background(), path, data)
 }
 
-// StorageWriteCtx is the context-aware variant of StorageWrite. On BLE
-// the firmware exposes only RPC, so we dispatch via the persistent
-// rpc.Client (storage_write_request, multi-Main with has_next) instead
-// of the USB-only write_chunk text protocol that WriteFileCtx uses.
+// StorageWriteCtx is the context-aware overwrite variant of StorageWrite.
+// On BLE, it uses persistent storage RPCs; on USB, it removes an existing
+// file before issuing write_chunk so append-only firmware still replaces.
 func (f *Flipper) StorageWriteCtx(ctx context.Context, path string, data string) error {
-	if f.IsBLE() {
-		return f.storageWriteViaRPC(ctx, path, []byte(data))
-	}
-	return f.WriteFileCtx(ctx, path, []byte(data))
+	return f.storageWriteReplaceCtx(ctx, path, []byte(data))
 }
 
 // storageWriteViaRPC drives the BLE-only RPC dispatch for StorageWrite.
@@ -2505,17 +2501,13 @@ func (f *Flipper) I2CScan() (string, error) {
 // --- Scripting ---
 
 // JSRun executes a saved JavaScript file on the Flipper's JS runtime.
-// Fork-gated: only the Xtreme, Momentum, and RogueMaster forks ship a JS
-// engine. On stock the call returns a friendly-fork error rather than
-// issuing a no-op CLI command that hangs.
+// Capability-gated: the call is rejected when firmware detection reports no
+// JS engine, independent of the firmware fork name.
 // CLI: js <path>
 func (f *Flipper) JSRun(path string, duration time.Duration) (string, error) {
 	caps := f.Capabilities()
-	switch strings.ToLower(caps.FirmwareFork) {
-	case "xtreme", "momentum", "roguemaster":
-		// supported
-	default:
-		return "", fmt.Errorf("JS runtime not available on %s firmware — switch to Xtreme/Momentum/RogueMaster or run the script from the on-device JS Runner app", caps.FriendlyFork())
+	if caps.JSEngineKind == "" {
+		return "", fmt.Errorf("JS runtime not available on %s firmware — use firmware that reports a JavaScript engine capability", caps.FriendlyFork())
 	}
 	return f.ExecLong(fmt.Sprintf("js %s", sanitizeArg(path)), duration)
 }

@@ -121,6 +121,9 @@ type Mock struct {
 	// causes the serve loop to consume the next N bytes as raw binary data
 	// rather than dispatching them as commands. Accessed only from serve().
 	writeChunkRemaining int64
+	writeChunkPath      string
+	writeChunkData      []byte
+	writeChunkHandler   WriteChunkHandler
 
 	closed chan struct{}
 	done   chan struct{}
@@ -253,10 +256,11 @@ func (m *Mock) serve() {
 			// Binary consume mode: swallow bytes written after write_chunk and
 			// emit a prompt once all N bytes have been received.
 			if m.writeChunkRemaining > 0 {
+				m.writeChunkData = append(m.writeChunkData, b)
 				m.writeChunkRemaining--
 				if m.writeChunkRemaining == 0 {
 					buf.Reset()
-					_, _ = m.master.WriteString("\r\n>: ")
+					m.finishWriteChunk()
 				}
 				continue
 			}
@@ -295,7 +299,22 @@ func (m *Mock) dispatch(line string) {
 	// storage write_chunk <path> <N>: switch to binary consume mode.
 	// The prompt is suppressed here; serve() emits it once all N bytes arrive.
 	if head == "storage" && len(fields) >= 4 && fields[1] == "write_chunk" {
-		if n, err := strconv.ParseInt(fields[3], 10, 64); err == nil && n > 0 {
+		if n, err := strconv.ParseInt(fields[3], 10, 64); err == nil {
+			m.writeChunkPath = fields[2]
+			m.writeChunkData = nil
+			if n == 0 {
+				body, prompt := "", true
+				if m.writeChunkHandler != nil {
+					body, prompt = m.writeChunkHandler(m.writeChunkPath, nil)
+				}
+				if body != "" {
+					_, _ = fmt.Fprint(m.master, body)
+				}
+				if prompt {
+					_, _ = m.master.WriteString("\r\n>: ")
+				}
+				return
+			}
 			m.writeChunkRemaining = n
 			return
 		}
@@ -304,6 +323,11 @@ func (m *Mock) dispatch(line string) {
 	body := ""
 	if h, ok := m.handlers[head]; ok {
 		body = h(fields[1:])
+	}
+	// A silent storage stat has no successful firmware shape. Treat it as a
+	// missing path so higher-level overwrite tests can model first-time writes.
+	if body == "" && head == "storage" && len(fields) >= 2 && fields[1] == "stat" {
+		body = "Storage error: not found"
 	}
 	if body != "" {
 		_, _ = m.master.WriteString(body)
@@ -320,6 +344,20 @@ func (m *Mock) dispatch(line string) {
 	if !suppress {
 		_, _ = m.master.WriteString("\r\n>: ")
 	}
+}
+
+func (m *Mock) finishWriteChunk() {
+	if m.writeChunkHandler != nil {
+		body, prompt := m.writeChunkHandler(m.writeChunkPath, append([]byte(nil), m.writeChunkData...))
+		if body != "" {
+			_, _ = fmt.Fprint(m.master, body)
+		}
+		if prompt {
+			_, _ = m.master.WriteString("\r\n>: ")
+		}
+		return
+	}
+	_, _ = m.master.WriteString("\r\n>: ")
 }
 
 // openPty allocates a (master, slave, slavePath) triple via the standard
