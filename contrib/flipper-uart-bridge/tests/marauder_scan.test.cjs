@@ -52,7 +52,7 @@ test('fallback stops prior work, assembles list/details, and queries only listed
   const listParts = [
     '#list -a\r\n[0][CH:',
     '6] TEST_AP_0 -40\r\n[1][CH:11] 001122334455 -50\r\n[2][CH:1] TEST_AP_2 -60\r\n',
-    '[3][CH:3] TEST_AP_3 -70\r\n3 selected\r\n>',
+    '[03][CH:3] TEST_AP_3 -70\r\n3 selected\r\n>',
   ];
   const result = runFallback({
     stopscan: [[], ['Stopping scan\r\n>']],
@@ -61,7 +61,7 @@ test('fallback stops prior work, assembles list/details, and queries only listed
     'info -a 0': [['#info -a 0\r\nESSID: TEST_', 'AP_0\r\nRSSI: -40\r\n>']],
     'info -a 1': [[detail(1)]],
     'info -a 2': [[detail(2)]],
-    'info -a 3': [[detail(3)]],
+    'info -a 03': [[detail(3)]],
   });
   const commands = commandNames(result);
   const preflightStop = commands.indexOf('stopscan');
@@ -73,7 +73,7 @@ test('fallback stops prior work, assembles list/details, and queries only listed
   assert.ok(preflightStop >= 0 && preflightStop < scanStart, 'preflight stopscan must precede scanall');
   assert.ok(scanStop > scanStart && list > scanStop, 'the new scan must stop before listing APs');
   assert.ok(result.writes[scanStop].time - result.writes[scanStart].time >= 5000);
-  assert.deepEqual(infoCommands, ['info -a 0', 'info -a 1', 'info -a 2', 'info -a 3']);
+  assert.deepEqual(infoCommands, ['info -a 0', 'info -a 1', 'info -a 2', 'info -a 03']);
   assert.ok(!infoCommands.includes('info -a 4'), 'must not query an index absent from list -a');
   assert.ok(result.output.includes('#info -a 0\r\nESSID: TEST_AP_0\r\nRSSI: -40\r\n>'));
   assert.ok(result.ended, 'must release serial ownership');

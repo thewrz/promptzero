@@ -76,7 +76,8 @@ function parseAPRowIndex(line) {
 
     let indexEnd = line.indexOf("]");
     if (indexEnd < 2) return -2;
-    let index = parseDecimal(line.slice(1, indexEnd));
+    let indexText = line.slice(1, indexEnd);
+    let index = parseDecimal(indexText);
     if (index < 0) return -2;
 
     let channelStart = indexEnd + 1;
@@ -91,7 +92,7 @@ function parseAPRowIndex(line) {
         channel.length);
     if (parseDecimal(channelValue) < 0) return -2;
     if (trimLine(line.slice(channelEnd + 1, line.length)).length === 0) return -2;
-    return index;
+    return indexText;
 }
 
 function isSelectionSummary(line) {
@@ -123,16 +124,17 @@ function parseAPList(response, indices) {
             continue;
         }
 
-        let index = parseAPRowIndex(line);
-        if (index < 0) return false;
+        let indexText = parseAPRowIndex(line);
+        if (indexText === -1 || indexText === -2) return false;
+        let index = parseDecimal(indexText);
         sawAPRow = true;
         let duplicate = false;
         for (let i = 0; i < indices.length; i++) {
-            if (indices[i] === index) duplicate = true;
+            if (parseDecimal(indices[i]) === index) duplicate = true;
         }
         if (duplicate) return false;
         if (indices.length < MAX_AP_DETAILS) {
-            indices.splice(indices.length, 0, index);
+            indices.splice(indices.length, 0, indexText);
         } else {
             listHasMoreAPs = true;
         }
