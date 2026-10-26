@@ -134,6 +134,9 @@ func run() error {
 		flip = nil
 		flipClose = func() {}
 	}
+	if f.mcpMode {
+		flipClose = registerShutdownCleanup(sh, flipClose)
+	}
 	defer flipClose()
 
 	rec := setupMetrics(cfg)
@@ -150,7 +153,7 @@ func run() error {
 	}
 
 	if f.mcpMode {
-		return runMCPMode(ctx, cfg, flip, f.wifiEnabled)
+		return runMCPMode(ctx, sh, cfg, flip, f.wifiEnabled)
 	}
 
 	if err := cfg.RequireAPIKey(); err != nil {

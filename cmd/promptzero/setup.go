@@ -495,13 +495,14 @@ func setupMetrics(cfg *config.Config) *obs.Recorder {
 //
 // Failures to construct the sidecars are non-fatal — they emit a
 // warning and the MCP server still serves the remaining surface.
-func runMCPMode(ctx context.Context, cfg *config.Config, flip *flipper.Flipper, wifiEnabled bool) error {
-	var m *marauder.Marauder
-	if wifiEnabled || cfg.Marauder.Enabled {
-		m, _ = marauder.Connect(cfg.Marauder.Port, cfg.Marauder.BaudRate)
-		if m != nil {
-			defer m.Close()
-		}
+func runMCPMode(ctx context.Context, sh *signalHandler, cfg *config.Config, flip *flipper.Flipper, wifiEnabled bool) error {
+	m, err := connectMarauderForMCP(ctx, cfg, flip, wifiEnabled)
+	if err != nil {
+		return err
+	}
+	if m != nil {
+		cleanup := registerShutdownCleanup(sh, func() { _ = m.Close() })
+		defer cleanup()
 	}
 	srv := mcp.NewServer(flip, m)
 	cleanup := wireMCPSidecars(ctx, cfg, flip, srv)
@@ -1208,124 +1209,6 @@ func validateMarauderFlags(f *runFlags) error {
 		return fmt.Errorf("--marauder-ble and --marauder-bridge are mutually exclusive: pick one (BLE goes direct to a standalone devboard; bridge routes through the Flipper UART)")
 	}
 	return nil
-}
-
-// setupMarauder attempts to connect the ESP32 Marauder WiFi devboard
-// when enabled. Returns (hasMarauder, cleanup). A failed connection is
-// non-fatal — the operator can still drive the Flipper alone. When
-// cfg.Marauder.Bridge is set, the Marauder is reached via the Flipper's
-// USB-UART Bridge app (single-cable rig); otherwise the legacy
-// separate-cable path is used.
-func setupMarauder(ctx context.Context, cfg *config.Config, ai *agent.Agent, rec *obs.Recorder, flip *flipper.Flipper, wifiEnabled bool) (bool, func()) {
-	if !wifiEnabled && !cfg.Marauder.Enabled {
-		return false, func() {}
-	}
-	if cfg.Marauder.Bridge {
-		return setupMarauderViaBridge(ctx, cfg, ai, flip, rec)
-	}
-	if strings.EqualFold(cfg.Marauder.Transport, "ble") {
-		return setupMarauderViaBLE(ctx, cfg, ai, rec)
-	}
-	statusInfo(fmt.Sprintf("Connecting to Marauder on %s%s%s...", bold, cfg.Marauder.Port, reset))
-	m, err := marauder.Connect(cfg.Marauder.Port, cfg.Marauder.BaudRate)
-	if err != nil {
-		statusWarn(fmt.Sprintf("Marauder unavailable: %v", err))
-		return false, func() {}
-	}
-	ai.SetMarauder(m)
-	if rec != nil {
-		rec.SetMarauderConnected(true)
-	}
-	statusOK("Marauder WiFi devboard connected")
-	return true, func() { m.Close() }
-}
-
-// setupMarauderViaBLE connects directly to a standalone ESP32-Marauder devboard
-// over its native BLE serial GATT layout. This path bypasses the Flipper UART
-// bridge entirely; no Flipper handle is touched, so the Flipper CLI (when
-// connected over its own transport) keeps working unchanged.
-//
-// The connect ctx applies to the scan + GATT discovery phase only — once
-// dialled, the BLE notifications drive Read independently of ctx.
-func setupMarauderViaBLE(ctx context.Context, cfg *config.Config, ai *agent.Agent, rec *obs.Recorder) (bool, func()) {
-	addr := cfg.Marauder.Port
-	if addr == "" {
-		statusWarn("Marauder BLE: address required (set marauder.port to a MAC/UUID/name or pass --marauder-ble <addr>)")
-		return false, func() {}
-	}
-	statusInfo(fmt.Sprintf("Connecting to Marauder over BLE at %sble://%s%s...", bold, addr, reset))
-	m, err := marauder.ConnectBLE(ctx, addr)
-	if err != nil {
-		statusWarn(fmt.Sprintf("Marauder BLE unavailable: %v", err))
-		return false, func() {}
-	}
-	ai.SetMarauder(m)
-	if rec != nil {
-		rec.SetMarauderConnected(true)
-	}
-	statusOK(fmt.Sprintf("Marauder devboard connected over BLE at %sble://%s%s", bold, addr, reset))
-	return true, func() { m.Close() }
-}
-
-// setupMarauderViaBridge launches the Flipper's USB-UART Bridge app and
-// reopens the same serial port as a Marauder client. On success the
-// passed *flipper.Flipper is suspended and all flipper_* CLI ops will
-// return ErrFlipperSuspended until process exit (auto-resume is out of
-// scope — see SPEC §8).
-//
-// Returns (true, cleanup) on success; (false, no-op) on failure.
-// Failure is non-fatal — the operator gets a warning and the agent runs
-// Flipper-only.
-func setupMarauderViaBridge(ctx context.Context, cfg *config.Config, ai *agent.Agent, flip *flipper.Flipper, rec *obs.Recorder) (bool, func()) {
-	if flip == nil {
-		statusWarn("Marauder bridge requires a connected Flipper — connect Flipper first or remove --marauder-bridge")
-		return false, func() {}
-	}
-	if flip.IsSuspended() {
-		statusWarn("Flipper already suspended — refusing to re-run bridge setup")
-		return false, func() {}
-	}
-	// Hybrid (BLE Flipper + USB-bridged Marauder) needs an explicit
-	// Marauder USB device — the Flipper isn't on USB so cfg.Serial.Port
-	// is irrelevant. Single-cable still uses cfg.Serial.Port.
-	hybrid := false
-	port := cfg.Serial.Port
-	if t := flip.Transport(); t != nil && t.Kind() == "ble" {
-		hybrid = true
-		if cfg.Marauder.Port == "" {
-			statusWarn("Hybrid bridge mode requires --marauder-port (Flipper is on BLE; Marauder USB device path must be set explicitly)")
-			return false, func() {}
-		}
-		port = cfg.Marauder.Port
-	}
-	statusInfo(fmt.Sprintf("Launching Flipper USB-UART Bridge for Marauder on %s%s%s...", bold, port, reset))
-	m, err := marauder.ConnectViaFlipper(
-		ctx,
-		flip,
-		port,
-		cfg.Marauder.BaudRate,
-		cfg.Marauder.BridgeCommand,
-		cfg.Marauder.BridgeSettle,
-		cfg.Marauder.BridgePortReopenTimeout,
-	)
-	if err != nil {
-		statusWarn(fmt.Sprintf("Marauder bridge: %v", err))
-		return false, func() {}
-	}
-	ai.SetMarauder(m)
-	if rec != nil {
-		rec.SetMarauderConnected(true)
-		if !hybrid {
-			rec.SetFlipperConnected(false) // CLI is gone for the rest of the session
-		}
-	}
-	if hybrid {
-		statusOK(fmt.Sprintf("Marauder via Flipper UART bridge on %s (Flipper CLI on BLE — both active)", port))
-	} else {
-		statusOK(fmt.Sprintf("Marauder via Flipper UART bridge on %s (Flipper CLI suspended)", port))
-		statusWarn("flipper_* tools disabled while UART bridge is active")
-	}
-	return true, func() { m.Close() }
 }
 
 // probeMarauderFirmware runs the `info` command and updates the web
