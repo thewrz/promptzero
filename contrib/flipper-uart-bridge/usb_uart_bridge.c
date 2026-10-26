@@ -116,12 +116,17 @@ static void app_on_serial_rx_dma(
     }
     FURI_CRITICAL_EXIT();
 
-    if(!(event & FuriHalSerialRxEventData)) return;
+    // OFW reports short DMA bursts on Idle even when the Data bit is clear.
+    size_t available = bridge_uart_rx_drain_length(
+        (event & FuriHalSerialRxEventData) != 0,
+        (event & FuriHalSerialRxEventIdle) != 0,
+        data_len);
+    if(available == 0) return;
 
     uint8_t buffer[FURI_HAL_SERIAL_DMA_BUFFER_SIZE];
-    size_t requested = data_len < sizeof(buffer) ? data_len : sizeof(buffer);
+    size_t requested = available < sizeof(buffer) ? available : sizeof(buffer);
     size_t received = furi_hal_serial_dma_rx(handle, buffer, requested);
-    if(data_len > requested) app_record_loss(&app->uart_rx_dropped, data_len, requested);
+    if(available > requested) app_record_loss(&app->uart_rx_dropped, available, requested);
     if(requested > received) app_record_loss(&app->uart_rx_dropped, requested, received);
     if(received == 0) return;
 
@@ -311,7 +316,8 @@ int32_t usb_uart_bridge_app(void* p) {
     }
     furi_hal_serial_init(app.serial_handle, BRIDGE_BAUD);
     app.serial_initialized = true;
-    furi_hal_serial_dma_rx_start(app.serial_handle, app_on_serial_rx_dma, &app, false);
+    // Error IRQ reporting is required for the overrun counter shown in the UI.
+    furi_hal_serial_dma_rx_start(app.serial_handle, app_on_serial_rx_dma, &app, true);
     app.serial_dma_started = true;
 
     app.cli_vcp = furi_record_open(RECORD_CLI_VCP);

@@ -38,6 +38,10 @@ uint32_t bridge_loss_record(uint32_t current, size_t offered, size_t accepted) {
     return current + increment;
 }
 
+size_t bridge_uart_rx_drain_length(bool data_event, bool idle_event, size_t data_len) {
+    return (data_event || idle_event) ? data_len : 0;
+}
+
 void bridge_lifecycle_init(BridgeLifecycle* lifecycle) {
     *lifecycle = (BridgeLifecycle){0};
 }

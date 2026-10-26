@@ -47,6 +47,19 @@ static void test_overflow_counts_only_unaccepted_bytes_and_saturates(void) {
     assert(bridge_loss_record(7, 4, 5) == 7);
 }
 
+static void test_uart_idle_event_drains_short_response_without_data_event(void) {
+    static const uint8_t reply[] = {0x69, 0x6e, 0x66, 0x6f, '\r', '\n', '>'};
+    uint8_t drained[sizeof(reply)] = {0};
+    size_t drain_length = bridge_uart_rx_drain_length(false, true, sizeof(reply));
+
+    assert(drain_length == sizeof(reply));
+    memcpy(drained, reply, drain_length);
+    assert(memcmp(drained, reply, sizeof(reply)) == 0);
+    assert(bridge_uart_rx_drain_length(true, false, sizeof(reply)) == sizeof(reply));
+    assert(bridge_uart_rx_drain_length(false, true, 0) == 0);
+    assert(bridge_uart_rx_drain_length(false, false, sizeof(reply)) == 0);
+}
+
 static void test_dtr_ignores_startup_glitches_and_arms_after_stable_high(void) {
     BridgeLifecycle lifecycle;
     bridge_lifecycle_init(&lifecycle);
@@ -156,6 +169,7 @@ int main(void) {
     test_tx_preserves_bytes_across_cdc_packet_boundaries();
     test_tx_timeout_does_not_advance_or_offer_another_packet();
     test_overflow_counts_only_unaccepted_bytes_and_saturates();
+    test_uart_idle_event_drains_short_response_without_data_event();
     test_dtr_ignores_startup_glitches_and_arms_after_stable_high();
     test_dtr_arm_dwell_uses_wrap_safe_tick_arithmetic();
     test_dtr_fall_arms_at_dwell_before_processing_edge();

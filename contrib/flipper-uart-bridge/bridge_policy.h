@@ -34,6 +34,7 @@ typedef struct {
 size_t bridge_tx_next(BridgeTxCursor* cursor, size_t total, size_t packet_limit);
 bool bridge_tx_complete(BridgeTxCursor* cursor, bool completed);
 uint32_t bridge_loss_record(uint32_t current, size_t offered, size_t accepted);
+size_t bridge_uart_rx_drain_length(bool data_event, bool idle_event, size_t data_len);
 
 void bridge_lifecycle_init(BridgeLifecycle* lifecycle);
 void bridge_lifecycle_set_connected(BridgeLifecycle* lifecycle, bool connected, uint32_t now);
