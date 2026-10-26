@@ -58,9 +58,8 @@ jobs:
             > "${OUTFILE}"
 
           LINES=$(wc -l < "${OUTFILE}")
-          echo "report_file=${OUTFILE}" >> "$GITHUB_OUTPUT"
-          echo "report_date=${DATE}"    >> "$GITHUB_OUTPUT"
-          echo "report_lines=${LINES}"  >> "$GITHUB_OUTPUT"
+          printf 'report_file=%s\nreport_date=%s\nreport_lines=%s\n' \
+            "$OUTFILE" "$DATE" "$LINES" >> "$GITHUB_OUTPUT"
 
       - name: Upload report artifact
         if: always()
