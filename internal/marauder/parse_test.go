@@ -359,6 +359,31 @@ func TestParseDeviceInfo_CanonicalOutput(t *testing.T) {
 	}
 }
 
+func TestParseDeviceInfo_ModernKeyValueOutput(t *testing.T) {
+	raw := "Firmware: Marauder\r\nVersion: v1.19.1\r\nHardware: Flipper Zero Dev Board\r\nApp partition: app0\r\nESP-IDF: v4.4.5"
+	d := ParseDeviceInfo(raw)
+	if !d.Detected || d.FirmwareName != "ESP32 Marauder" || d.FirmwareVersion != "1.19.1" {
+		t.Fatalf("ParseDeviceInfo(%q) = %+v, want Marauder v1.19.1", raw, d)
+	}
+	if d.ESPIDFVersion != "4.4.5" {
+		t.Errorf("ESP-IDF version = %q, want 4.4.5", d.ESPIDFVersion)
+	}
+}
+
+func TestParseDeviceInfo_ModernVersionWithoutFirmwareIsNotMarauder(t *testing.T) {
+	d := ParseDeviceInfo("Version: v1.19.1\nHardware: other device")
+	if d.Detected || d.FirmwareVersion != "" {
+		t.Fatalf("ParseDeviceInfo(version-only modern output) = %+v, want undetected", d)
+	}
+}
+
+func TestParseDeviceInfo_ModernFirmwareWithoutVersionIsNotMarauder(t *testing.T) {
+	d := ParseDeviceInfo("Firmware: Marauder\nHardware: Flipper Zero Dev Board")
+	if d.Detected || d.FirmwareVersion != "" {
+		t.Fatalf("ParseDeviceInfo(firmware-only modern output) = %+v, want undetected", d)
+	}
+}
+
 func TestParseDeviceInfo_VersionOnly(t *testing.T) {
 	d := ParseDeviceInfo("Marauder v0.10.0")
 	if !d.Detected {

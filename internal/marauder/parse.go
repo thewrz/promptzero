@@ -304,7 +304,7 @@ type DeviceInfo struct {
 
 var (
 	reMarauderVersion = regexp.MustCompile(`(?i)(?:ESP32\s+)?Marauder\s+v?([\d.]+)`)
-	reESPIDFVersion   = regexp.MustCompile(`(?i)ESP-IDF\s+(?:Version:\s*)?v?([\S]+)`)
+	reESPIDFVersion   = regexp.MustCompile(`(?i)ESP-IDF\s*:?\s*(?:Version:\s*)?v?([\S]+)`)
 	reChannel         = regexp.MustCompile(`(?i)Channel:\s*(\d+)`)
 	reMAC             = regexp.MustCompile(`(?i)MAC:\s*([\da-fA-F:]{17})`)
 )
@@ -312,6 +312,9 @@ var (
 // ParseDeviceInfo extracts structured device information from the raw
 // output of the Marauder `info` command.
 func ParseDeviceInfo(raw string) DeviceInfo {
+	if d, ok := parseModernDeviceInfo(raw); ok {
+		return d
+	}
 	var d DeviceInfo
 	if m := reMarauderVersion.FindStringSubmatch(raw); len(m) > 1 {
 		d.Detected = true

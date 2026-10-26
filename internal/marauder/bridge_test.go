@@ -77,7 +77,7 @@ func withConnectFn(t *testing.T, fn func(string, int) (*Marauder, error)) {
 // produce a non-nil *Marauder without opening a real device.
 func makeFakeMarauder() *Marauder {
 	p := newFakePort()
-	p.respond("info", "ESP32 Marauder v1.11.1\n")
+	p.respond("info", "Firmware: Marauder\r\nVersion: v1.19.1\r\nHardware: Flipper Zero Dev Board\r\nApp partition: app0\r\nESP-IDF: v4.4.5\r\n")
 	return newMarauderWithPort(p)
 }
 
