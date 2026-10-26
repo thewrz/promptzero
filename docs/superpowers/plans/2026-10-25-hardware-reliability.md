@@ -61,7 +61,7 @@
 - [x] Implement minimal shell launcher with bounded readiness and clear busy diagnostics; retain raw/no-echo and pass the resolved port consistently to PromptZero.
 - [x] Add an MCP smoke client with bounded requests and no model key that checks initialization/list/call and records structured results locally.
 - [x] shellcheck, Python lint and process tests; commit.
-- [ ] Verify current-thread Codex discovery through its supported diagnostics before changing global waits.
+- [x] Verify current-thread Codex discovery through its supported diagnostics before changing global waits.
 
 ### Task 5: Custom FAP transport and lifecycle
 
@@ -79,9 +79,9 @@
 **Interfaces:** unchanged existing MCP registration except demonstrated necessary corrections; no permanent risk-gate overrides.
 
 - [x] Back up/check installed artifacts, build fork, deploy reversible local artifacts and FAP using supported storage RPC.
-- [ ] MCP initialize/list, wifi_scan_ap structured fields, shutdown/CLI recovery, second scan session, and competing launcher test; keep radio output private.
+- [x] MCP initialize/list, wifi_scan_ap structured fields, shutdown/CLI recovery, second scan session, and competing launcher test; keep radio output private.
 - [x] Verify Flipper-only path and document single-cable Wi-Fi/core switching limitations.
 - [x] Run task ci and added host tests; review each task and the final branch; fix findings with regression tests.
-- [ ] Update verified runbook and fallback script; publish reviewable branches in the personal fork with exact validation evidence. No PR creation or merge without a separate request.
+- [x] Update verified runbook and fallback script; publish reviewable branches in the personal fork with exact validation evidence. No PR creation or merge without a separate request.
 
-Final hardware acceptance remains pending after USB disconnection: upload the corrected JS fallback, repeat native scans and CLI recovery, and verify the active Codex client catalog. The custom FAP, wrapper, and Go binary are installed; original artifacts are backed up.
+Final hardware acceptance completed after USB reconnection: corrected JS fallback uploaded/read back/executed; three native scans and recovery sessions passed; a fresh thread in the active Codex daemon discovered 708 tools and scanned successfully. The older conversation retains a failed startup connection, so the runbook recommends a fresh session for that state. Original artifacts remain backed up.

@@ -148,3 +148,19 @@ The Bluetooth module is pinned to the reviewed Linux scan-cancellation fix in
 It retains TinyGo Bluetooth's BSD license. The pin removes the need for a local
 workspace override when running race tests on a Linux host with a Bluetooth
 adapter.
+
+## Device validation
+
+Validated on stock Flipper firmware 1.3.4 / API 86 and Marauder v1.19.1 on
+2026-10-25: three consecutive native scans returned complete AP records, each
+followed by a successful Flipper-only `device_info` recovery check. The corrected
+JS fallback was uploaded, read back byte-for-byte, and executed without script
+errors or a devboard reboot. AP indexes stay strings when constructing commands
+because the stock JavaScript runtime prohibits implicit number-to-string conversion.
+
+A fresh diagnostic thread in the running Codex daemon discovered 708 tools and
+successfully called `wifi_scan_ap`. The older conversation retained its failed
+startup connection after USB disconnection and configuration reload. Use a fresh
+Codex session if that failed status persists after reconnecting. These checks did
+not establish an optional-startup-grace defect; the global grace remains unchanged.
+Private scan evidence stays local and is not included in this repository.
