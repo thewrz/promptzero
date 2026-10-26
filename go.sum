@@ -153,6 +153,8 @@ github.com/standard-webhooks/standard-webhooks/libraries v0.0.1/go.mod h1:L1MQhA
 github.com/stretchr/testify v1.2.2/go.mod h1:a8OnRcib4nhh0OaRAV+Yts87kKdq0PP7pXfy6kDkUVs=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
+github.com/thewrz/bluetooth v0.16.1-0.20261026011133-625592a24264 h1:+d0VUVjjWwqMM/rX7MNhyjS//YWbILtObDulhCq3yVM=
+github.com/thewrz/bluetooth v0.16.1-0.20261026011133-625592a24264/go.mod h1:MRj/k5a7rBNIRpC0bAX0VNuSilv+JD83thE4zjxs2EM=
 github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
 github.com/tidwall/gjson v1.20.0 h1:+agJ3rEzKcCXKDKo0ml26UROcpcAlnZyjq+TjbY5Fto=
 github.com/tidwall/gjson v1.20.0/go.mod h1:V37/opeE/JbLUOfH0QTXiNez2l0RUjYUhpT4szFQAfc=
@@ -336,7 +338,5 @@ modernc.org/strutil v1.2.1 h1:UneZBkQA+DX2Rp35KcM69cSsNES9ly8mQWD71HKlOA0=
 modernc.org/strutil v1.2.1/go.mod h1:EHkiggD70koQxjVdSBM3JKM7k6L0FbGE5eymy9i3B9A=
 modernc.org/token v1.1.0 h1:Xl7Ap9dKaEs5kLoOQeQmPWevfnk/DM5qcLcYlA8ys6Y=
 modernc.org/token v1.1.0/go.mod h1:UGzOrNV1mAFSEB63lOFHIpNRUVMvYTc6yu1SMY/XTDM=
-tinygo.org/x/bluetooth v0.16.0 h1:vadiRkyCWukpGkYL9xBwY7j/vslReiZZ3BAWdVE0G4E=
-tinygo.org/x/bluetooth v0.16.0/go.mod h1:MRj/k5a7rBNIRpC0bAX0VNuSilv+JD83thE4zjxs2EM=
 tinygo.org/x/espradio v0.4.0 h1:xq/DJKr0ibL0R6Q+zlS2Lpfin7aHdmoABd6qMVNg4zA=
 tinygo.org/x/espradio v0.4.0/go.mod h1:PI7GtwabAzn6R+JN6eIyHjYZpGf1/ABkh4OzpDFQJ3E=

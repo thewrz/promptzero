@@ -82,3 +82,5 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 	tinygo.org/x/espradio v0.4.0 // indirect
 )
+
+replace tinygo.org/x/bluetooth => github.com/thewrz/bluetooth v0.16.1-0.20261026011133-625592a24264
