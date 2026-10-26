@@ -76,8 +76,15 @@ func withConnectFn(t *testing.T, fn func(string, int) (*Marauder, error)) {
 // makeFakeMarauder returns a Marauder backed by a fakePort so tests can
 // produce a non-nil *Marauder without opening a real device.
 func makeFakeMarauder() *Marauder {
-	return newMarauderWithPort(newFakePort())
+	p := newFakePort()
+	p.respond("info", "ESP32 Marauder v1.11.1\n")
+	return newMarauderWithPort(p)
 }
+
+type unconfirmedBridgeHandoffError struct{}
+
+func (unconfirmedBridgeHandoffError) Error() string                  { return "bridge handoff unconfirmed" }
+func (unconfirmedBridgeHandoffError) BridgeHandoffUnconfirmed() bool { return true }
 
 // fastSettle / fastReopen keep the test budget low while still exercising
 // the post-launch sleep and the reopen retry loop.
@@ -107,6 +114,110 @@ func TestConnectViaFlipper_HappyPath(t *testing.T) {
 	}
 	if flip.suspendReason != "UART bridge active" {
 		t.Errorf("Suspend reason = %q, want %q", flip.suspendReason, "UART bridge active")
+	}
+}
+
+func TestConnectViaFlipper_ContinuesUnconfirmedHandoffOnlyAfterPeerProbe(t *testing.T) {
+	flip := &fakeBridgeFlipper{
+		execErr:   unconfirmedBridgeHandoffError{},
+		transport: &stubTransport{kind: "serial"},
+	}
+	withConnectFn(t, func(_ string, _ int) (*Marauder, error) { return makeFakeMarauder(), nil })
+
+	m, err := ConnectViaFlipper(context.Background(), flip, "/dev/ttyACM0", 115200, "", fastSettle, fastReopen)
+	if err != nil {
+		t.Fatalf("ConnectViaFlipper: %v", err)
+	}
+	if m == nil {
+		t.Fatal("got nil Marauder after successful peer probe")
+	}
+}
+
+func TestConnectViaFlipper_HandoffRejectionDoesNotReopen(t *testing.T) {
+	flip := &fakeBridgeFlipper{
+		execResp:  `Application "USB-UART Bridge" not found`,
+		execErr:   unconfirmedBridgeHandoffError{},
+		transport: &stubTransport{kind: "serial"},
+	}
+	called := false
+	withConnectFn(t, func(_ string, _ int) (*Marauder, error) {
+		called = true
+		return makeFakeMarauder(), nil
+	})
+
+	_, err := ConnectViaFlipper(context.Background(), flip, "/dev/ttyACM0", 115200, "", fastSettle, fastReopen)
+	if !errors.Is(err, ErrBridgeRejected) {
+		t.Fatalf("ConnectViaFlipper error = %v, want bridge rejection", err)
+	}
+	if called {
+		t.Fatal("reopened port after explicit CLI rejection")
+	}
+}
+
+func TestConnectViaFlipper_RejectsWrongPeerAndClosesPort(t *testing.T) {
+	flip := &fakeBridgeFlipper{execResp: scriptedOK, transport: &stubTransport{kind: "serial"}}
+	p := newFakePort()
+	p.respond("info", "ESP32 DevKit\n")
+	m := newMarauderWithPort(p)
+	withConnectFn(t, func(_ string, _ int) (*Marauder, error) { return m, nil })
+
+	got, err := ConnectViaFlipper(context.Background(), flip, "/dev/ttyACM0", 115200, "", fastSettle, fastReopen)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "not marauder") {
+		t.Fatalf("ConnectViaFlipper error = %v, want wrong-peer error", err)
+	}
+	if got != nil {
+		t.Fatalf("Marauder = %v, want nil on wrong peer", got)
+	}
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if !closed {
+		t.Fatal("reopened wrong-peer port was not closed")
+	}
+}
+
+func TestConnectViaFlipper_CanceledPeerProbeClosesReopenedPort(t *testing.T) {
+	flip := &fakeBridgeFlipper{execResp: scriptedOK, transport: &stubTransport{kind: "serial"}}
+	p := newFakePort()
+	p.suppressPrompt("info")
+	ctx, cancel := context.WithCancel(context.Background())
+	p.onWrite = func(cmd string) {
+		if cmd == "info" {
+			cancel()
+		}
+	}
+	m := newMarauderWithPort(p)
+	withConnectFn(t, func(_ string, _ int) (*Marauder, error) { return m, nil })
+
+	got, err := ConnectViaFlipper(ctx, flip, "/dev/ttyACM0", 115200, "", fastSettle, fastReopen)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ConnectViaFlipper error = %v, want cancellation", err)
+	}
+	if got != nil {
+		t.Fatalf("Marauder = %v, want nil after canceled probe", got)
+	}
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if !closed {
+		t.Fatal("reopened port was not closed after canceled peer probe")
+	}
+}
+
+func TestConnectViaFlipper_HandoffCancellationDoesNotReopen(t *testing.T) {
+	flip := &fakeBridgeFlipper{execErr: context.Canceled, transport: &stubTransport{kind: "serial"}}
+	called := false
+	withConnectFn(t, func(_ string, _ int) (*Marauder, error) {
+		called = true
+		return makeFakeMarauder(), nil
+	})
+
+	_, err := ConnectViaFlipper(context.Background(), flip, "/dev/ttyACM0", 115200, "", fastSettle, fastReopen)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ConnectViaFlipper error = %v, want cancellation", err)
+	}
+	if called {
+		t.Fatal("reopened port after canceled bridge launch")
 	}
 }
 

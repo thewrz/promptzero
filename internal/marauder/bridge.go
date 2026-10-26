@@ -48,6 +48,8 @@ type bridgeFlipper interface {
 // ConnectViaFlipper can be exercised without touching a device.
 var connectFn = Connect
 
+const bridgePeerProbeTimeout = 2 * time.Second
+
 // bridgeRejectionMarkers is the case-insensitive substring set used to
 // classify a CLI response as "the firmware did not run the bridge app".
 // Each phrase is sourced from a real firmware response in either OFW,
@@ -143,7 +145,13 @@ func ConnectViaFlipper(
 	// loader-open command shape).
 	out, err := flip.LaunchBridge(ctx, bridgeCmd)
 	if err != nil {
-		return nil, fmt.Errorf("launching bridge app: %w", err)
+		if reason := classifyBridgeRejection(out); reason != "" {
+			return nil, fmt.Errorf("%w: %s", ErrBridgeRejected, reason)
+		}
+		var unconfirmed interface{ BridgeHandoffUnconfirmed() bool }
+		if !errors.As(err, &unconfirmed) || !unconfirmed.BridgeHandoffUnconfirmed() {
+			return nil, fmt.Errorf("launching bridge app: %w", err)
+		}
 	}
 	if reason := classifyBridgeRejection(out); reason != "" {
 		return nil, fmt.Errorf("%w: %s", ErrBridgeRejected, reason)
@@ -181,9 +189,20 @@ func ConnectViaFlipper(
 		}
 		m, oerr := connectFn(portName, baudRate)
 		if oerr == nil {
-			return m, nil
+			if m == nil {
+				lastErr = errors.New("reopen returned nil Marauder without an error")
+			} else if err := verifyBridgePeer(ctx, m); err != nil {
+				closeErr := m.Close()
+				if closeErr != nil {
+					err = errors.Join(err, fmt.Errorf("closing unverified port: %w", closeErr))
+				}
+				return nil, fmt.Errorf("verifying reopened Marauder on %s: %w", portName, err)
+			} else {
+				return m, nil
+			}
+		} else {
+			lastErr = oerr
 		}
-		lastErr = oerr
 		select {
 		case <-time.After(150 * time.Millisecond):
 		case <-ctx.Done():
@@ -191,6 +210,26 @@ func ConnectViaFlipper(
 		}
 	}
 	return nil, fmt.Errorf("reopening %s after bridge launch: %w", portName, lastErr)
+}
+
+func verifyBridgePeer(ctx context.Context, m *Marauder) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, bridgePeerProbeTimeout)
+	defer cancel()
+	raw, err := m.ExecCtx(probeCtx, "info", bridgePeerProbeTimeout)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return fmt.Errorf("running info probe: %w", err)
+	}
+	info := ParseDeviceInfo(raw)
+	if !info.Detected || info.FirmwareVersion == "" {
+		return fmt.Errorf("peer is not Marauder: info response did not identify firmware and version")
+	}
+	return nil
 }
 
 // classifyBridgeRejection returns a non-empty trimmed copy of out when it

@@ -237,7 +237,7 @@ func (f *Flipper) Transport() transport.Transport { return f.transport }
 // into UART pass-through mode.
 func (f *Flipper) LaunchBridge(ctx context.Context, command string) (string, error) {
 	if !f.IsBLE() {
-		return f.ExecCtx(ctx, command)
+		return f.launchBridgeUSB(ctx, command)
 	}
 	return f.launchBridgeViaGPIORPC(ctx)
 }
