@@ -16,15 +16,17 @@ import (
 )
 
 type marauderConnectOps struct {
-	serial func(string, int) (*marauder.Marauder, error)
-	ble    func(context.Context, string) (*marauder.Marauder, error)
-	bridge func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration) (*marauder.Marauder, error)
+	serial      func(string, int) (*marauder.Marauder, error)
+	ble         func(context.Context, string) (*marauder.Marauder, error)
+	bridge      func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration) (*marauder.Marauder, error)
+	flipperKind func(*flipper.Flipper) string
 }
 
 func productionMarauderConnectOps() marauderConnectOps {
 	return marauderConnectOps{
-		serial: marauder.Connect,
-		ble:    marauder.ConnectBLE,
+		serial:      marauder.Connect,
+		ble:         marauder.ConnectBLE,
+		flipperKind: transportKind,
 		bridge: func(ctx context.Context, flip *flipper.Flipper, port string, baud int, command string, settle, reopen time.Duration) (*marauder.Marauder, error) {
 			return marauder.ConnectViaFlipper(ctx, flip, port, baud, command, settle, reopen)
 		},
@@ -57,7 +59,11 @@ func connectMarauderWithOps(ctx context.Context, cfg *config.Config, flip *flipp
 		if flip.IsSuspended() {
 			return nil, fmt.Errorf("marauder bridge cannot start: %w", flipper.ErrFlipperSuspended)
 		}
-		port, _, err := marauderBridgePort(cfg, transportKind(flip))
+		kind := transportKind(flip)
+		if ops.flipperKind != nil {
+			kind = ops.flipperKind(flip)
+		}
+		port, _, err := marauderBridgePort(cfg, kind)
 		if err != nil {
 			return nil, err
 		}
@@ -67,6 +73,15 @@ func connectMarauderWithOps(ctx context.Context, cfg *config.Config, flip *flipp
 		}
 		if m == nil {
 			return nil, errors.New("connecting Marauder via Flipper bridge returned no client")
+		}
+		if cfg.Marauder.BridgeExitDTR {
+			if err := m.EnableBridgeExitDTR(ctx); err != nil {
+				armErr := fmt.Errorf("arming custom-FAP bridge exit DTR: %w", err)
+				if closeErr := m.Close(); closeErr != nil {
+					armErr = errors.Join(armErr, fmt.Errorf("closing Marauder after DTR setup failure: %w", closeErr))
+				}
+				return nil, armErr
+			}
 		}
 		return m, nil
 	}

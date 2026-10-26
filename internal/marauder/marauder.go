@@ -56,6 +56,12 @@ type portIface = Port
 type Marauder struct {
 	port portIface
 	mu   sync.Mutex
+	// lifecycleMu serializes bridge DTR arming with resource close. DTR is
+	// enabled only for an explicitly configured custom-FAP bridge.
+	lifecycleMu   sync.Mutex
+	bridgeExitDTR bool
+	closed        bool
+	closeErr      error
 	// streamBackpressure bounds how long Stream waits to deliver a line
 	// before giving up on a stalled consumer. Zero means the 2s default;
 	// tests set it small. On expiry Stream stops the device scan (stopscan)
@@ -159,7 +165,24 @@ func ConnectBLE(ctx context.Context, addr string) (*Marauder, error) {
 }
 
 func (m *Marauder) Close() error {
-	return m.port.Close()
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	if m.closed {
+		return m.closeErr
+	}
+	m.closed = true
+
+	var dtrErr error
+	if m.bridgeExitDTR {
+		if p, ok := m.port.(bridgeExitDTRPort); ok {
+			if err := p.SetDTR(false); err != nil {
+				dtrErr = fmt.Errorf("lowering bridge-exit DTR: %w", err)
+			}
+		}
+	}
+	portErr := m.port.Close()
+	m.closeErr = errors.Join(dtrErr, portErr)
+	return m.closeErr
 }
 
 // Exec sends a command and reads the response until the '> ' prompt appears or idle timeout.

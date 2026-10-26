@@ -124,6 +124,56 @@ func TestResolveConfirmRisk_UnknownReturnsErrorPlusFallback(t *testing.T) {
 	}
 }
 
+func TestApplyConfigOverridesEnablesMarauderBridgeExitDTR(t *testing.T) {
+	cfg := &config.Config{}
+	flags := &runFlags{marauderBridgeExitDTR: true}
+
+	applyConfigOverrides(cfg, flags)
+	if !cfg.Marauder.BridgeExitDTR {
+		t.Fatal("marauder.bridge_exit_dtr was not enabled from the CLI flag")
+	}
+}
+
+func TestValidateMarauderConfigRequiresBridgeForExitDTR(t *testing.T) {
+	cfg := &config.Config{Marauder: config.MarauderConfig{BridgeExitDTR: true}}
+	if err := validateMarauderConfig(cfg); err == nil {
+		t.Fatal("validateMarauderConfig() error = nil, want bridge requirement")
+	}
+
+	cfg.Marauder.Bridge = true
+	if err := validateMarauderConfig(cfg); err != nil {
+		t.Fatalf("validateMarauderConfig() with bridge enabled = %v", err)
+	}
+}
+
+func TestApplyConfigOverridesNoWiFiDisablesConfiguredMarauder(t *testing.T) {
+	cfg := &config.Config{Marauder: config.MarauderConfig{Enabled: true, Bridge: true}}
+	applyConfigOverrides(cfg, &runFlags{noWiFi: true})
+
+	if cfg.Marauder.Enabled || !cfg.Marauder.Bridge {
+		t.Fatalf("Marauder config after --no-wifi = %+v, want disabled while preserving bridge settings", cfg.Marauder)
+	}
+}
+
+func TestValidateMarauderFlagsRejectsNoWiFiConflicts(t *testing.T) {
+	cases := []struct {
+		name  string
+		flags runFlags
+	}{
+		{name: "wifi", flags: runFlags{noWiFi: true, wifiEnabled: true}},
+		{name: "bridge", flags: runFlags{noWiFi: true, marauderBridge: true}},
+		{name: "BLE", flags: runFlags{noWiFi: true, marauderBLEAddr: "board.local"}},
+		{name: "DTR", flags: runFlags{noWiFi: true, marauderBridgeExitDTR: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateMarauderFlags(&tc.flags); err == nil {
+				t.Fatal("validateMarauderFlags() error = nil, want --no-wifi conflict")
+			}
+		})
+	}
+}
+
 // TestSetupBudget_WiresCallbacksEvenWithoutCap pins the v0.81 fix:
 // when the operator starts with no --budget flag and no
 // cost.budget_usd configured, setupBudget still installs the warn/hit

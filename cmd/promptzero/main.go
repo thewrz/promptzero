@@ -109,6 +109,9 @@ func run() error {
 	if err := validateMarauderFlags(f); err != nil {
 		return err
 	}
+	if err := validateMarauderConfig(cfg); err != nil {
+		return err
+	}
 
 	// Install the slog handler before any subsystem so they share a
 	// configured default. PROMPTZERO_LOG_LEVEL is an operator-only

@@ -328,6 +328,10 @@ type MarauderConfig struct {
 	// Marauder (Port is ignored when Bridge=true).
 	Bridge bool `yaml:"bridge,omitempty"`
 
+	// BridgeExitDTR enables the custom-FAP host DTR exit protocol. It is
+	// opt-in because standard Flipper bridge apps do not use this signal.
+	BridgeExitDTR bool `yaml:"bridge_exit_dtr,omitempty"`
+
 	// BridgeCommand is the firmware-specific CLI string to launch the
 	// USB-UART bridge app. Empty means use the package default
 	// (`loader open "USB-UART Bridge"`). Override for forks that ship

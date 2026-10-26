@@ -114,6 +114,9 @@ marauder:
   # mode is active, all flipper_* tools are disabled (the CLI is gone by
   # firmware design).
   bridge: false
+  # Custom FAP only: assert DTR for 500ms on bridge connection and lower it
+  # on close so the FAP exits cleanly. Requires bridge: true.
+  # bridge_exit_dtr: true
   # Override per firmware: Momentum / Unleashed / RogueMaster all ship the
   # app as "USB-UART Bridge" today; older OFW builds may expect a different
   # name. Quotes are part of the CLI verb — keep them.
@@ -213,37 +216,39 @@ func resolveConfirmRisk(cfgValue, flagValue string, yolo bool) (risk.Level, bool
 // single struct so run() can pass the whole set to helpers without
 // restating the column of scalars every time.
 type runFlags struct {
-	cfgPath              string
-	portOverride         string
-	transportOverride    string
-	marauderPortOverride string
-	marauderBLEAddr      string // --marauder-ble
-	marauderBridge       bool   // --marauder-bridge
-	marauderBridgeCmd    string // --marauder-bridge-command
-	webMode              bool
-	webPort              int
-	voiceMode            bool
-	wifiEnabled          bool
-	mcpMode              bool
-	showVersion          bool
-	doInit               bool
-	resumeID             string
-	autoResume           bool
-	genProvider          string
-	ollamaURL            string
-	ollamaModel          string
-	connectTimeout       time.Duration
-	pipelineProfile      string
-	yoloMode             bool
-	confirmRisk          string
-	personaName          string
-	modeName             string  // --mode (deprecated, see runFlags.readOnly)
-	readOnly             bool    // --read-only
-	budgetUSD            float64 // --budget
-	webShare             bool    // --web-share — print copy-pasteable URL with the bearer token embedded
-	watchPaths           stringSlice
-	bleDiscover          bool          // --ble-discover
-	bleDiscoverDuration  time.Duration // --ble-discover-duration
+	cfgPath               string
+	portOverride          string
+	transportOverride     string
+	marauderPortOverride  string
+	marauderBLEAddr       string // --marauder-ble
+	marauderBridge        bool   // --marauder-bridge
+	marauderBridgeExitDTR bool   // --marauder-bridge-exit-dtr
+	marauderBridgeCmd     string // --marauder-bridge-command
+	noWiFi                bool   // --no-wifi
+	webMode               bool
+	webPort               int
+	voiceMode             bool
+	wifiEnabled           bool
+	mcpMode               bool
+	showVersion           bool
+	doInit                bool
+	resumeID              string
+	autoResume            bool
+	genProvider           string
+	ollamaURL             string
+	ollamaModel           string
+	connectTimeout        time.Duration
+	pipelineProfile       string
+	yoloMode              bool
+	confirmRisk           string
+	personaName           string
+	modeName              string  // --mode (deprecated, see runFlags.readOnly)
+	readOnly              bool    // --read-only
+	budgetUSD             float64 // --budget
+	webShare              bool    // --web-share — print copy-pasteable URL with the bearer token embedded
+	watchPaths            stringSlice
+	bleDiscover           bool          // --ble-discover
+	bleDiscoverDuration   time.Duration // --ble-discover-duration
 }
 
 // parseFlags binds all CLI flags and calls flag.Parse. Returns the
@@ -257,11 +262,14 @@ func parseFlags() *runFlags {
 	flag.IntVar(&f.webPort, "web-port", 0, "Web server port (overrides config)")
 	flag.BoolVar(&f.voiceMode, "voice", false, "Enable voice input (requires sox + OPENAI_API_KEY)")
 	flag.BoolVar(&f.wifiEnabled, "wifi", false, "Connect to ESP32 Marauder WiFi devboard")
+	flag.BoolVar(&f.noWiFi, "no-wifi", false, "Do not connect to the Marauder, even when enabled in config")
 	flag.StringVar(&f.marauderPortOverride, "marauder-port", "", "Marauder serial port (overrides config; e.g. /dev/ttyUSB0 for CP210x-bridged Marauders, /dev/ttyACM1 for ESP32-S2 native USB)")
 	flag.StringVar(&f.marauderBLEAddr, "marauder-ble", "",
 		"Connect directly to a standalone ESP32-Marauder devboard over BLE (skips the Flipper UART bridge entirely). Address is a hardware MAC on Linux/Windows, a CoreBluetooth UUID on macOS (run --ble-discover to find it), or a device LocalName like \"Marauder\". Mutually exclusive with --marauder-bridge. Not supported in WSL2.")
 	flag.BoolVar(&f.marauderBridge, "marauder-bridge", false,
 		"Drive the Marauder via the Flipper's USB-UART bridge (Marauder stacked on GPIO header — single USB cable). Disables flipper_* tools while active.")
+	flag.BoolVar(&f.marauderBridgeExitDTR, "marauder-bridge-exit-dtr", false,
+		"Custom FAP only: arm host DTR exit on Flipper bridge and lower it when the session closes. Requires bridge mode.")
 	flag.StringVar(&f.marauderBridgeCmd, "marauder-bridge-command", "",
 		"Override the Flipper CLI command that launches the UART bridge app (default: loader open \"USB-UART Bridge\").")
 	flag.BoolVar(&f.mcpMode, "mcp", false, "Run as MCP server (stdin/stdout)")
@@ -324,6 +332,12 @@ func applyConfigOverrides(cfg *config.Config, f *runFlags) {
 		// Bridge mode implies Marauder is wanted; --wifi can also be
 		// omitted with this flag set.
 		cfg.Marauder.Enabled = true
+	}
+	if f.marauderBridgeExitDTR {
+		cfg.Marauder.BridgeExitDTR = true
+	}
+	if f.noWiFi {
+		cfg.Marauder.Enabled = false
 	}
 	if f.marauderBridgeCmd != "" {
 		cfg.Marauder.BridgeCommand = f.marauderBridgeCmd
@@ -1207,6 +1221,25 @@ func buildPersonaFallback(p *persona.Persona, ollamaURL, ollamaModel string, cli
 func validateMarauderFlags(f *runFlags) error {
 	if f.marauderBLEAddr != "" && f.marauderBridge {
 		return fmt.Errorf("--marauder-ble and --marauder-bridge are mutually exclusive: pick one (BLE goes direct to a standalone devboard; bridge routes through the Flipper UART)")
+	}
+	if f.noWiFi {
+		switch {
+		case f.wifiEnabled:
+			return fmt.Errorf("--no-wifi conflicts with --wifi")
+		case f.marauderBridge:
+			return fmt.Errorf("--no-wifi conflicts with --marauder-bridge")
+		case f.marauderBLEAddr != "":
+			return fmt.Errorf("--no-wifi conflicts with --marauder-ble")
+		case f.marauderBridgeExitDTR:
+			return fmt.Errorf("--no-wifi conflicts with --marauder-bridge-exit-dtr")
+		}
+	}
+	return nil
+}
+
+func validateMarauderConfig(cfg *config.Config) error {
+	if cfg.Marauder.BridgeExitDTR && !cfg.Marauder.Bridge {
+		return fmt.Errorf("marauder.bridge_exit_dtr requires marauder.bridge")
 	}
 	return nil
 }
