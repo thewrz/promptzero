@@ -298,12 +298,16 @@ func TestConnectMarauderWithOpsClosesClientWhenDTRArmIsCancelled(t *testing.T) {
 	}}
 	cfg := &config.Config{Serial: config.SerialConfig{Port: "/dev/ttyACM0"}, Marauder: config.MarauderConfig{Bridge: true, BridgeExitDTR: true}}
 
+	started := time.Now()
 	got, err := connectMarauderWithOps(ctx, cfg, flipper.NewForTest(flipper.Capabilities{}), ops)
 	if !errors.Is(err, context.Canceled) || got != nil {
 		t.Fatalf("connectMarauderWithOps() = (%p, %v), want nil client and context cancellation", got, err)
 	}
 	if gotEvents, wantEvents := strings.Join(p.events, ","), "dtr-high,dtr-low,close"; gotEvents != wantEvents {
 		t.Fatalf("cancel cleanup sequence = %q, want %q", gotEvents, wantEvents)
+	}
+	if elapsed := time.Since(started); elapsed < 500*time.Millisecond {
+		t.Fatalf("connector released bridge after %s, want at least 500ms after DTR-high", elapsed)
 	}
 }
 

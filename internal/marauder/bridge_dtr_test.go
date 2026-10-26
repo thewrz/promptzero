@@ -14,6 +14,7 @@ type dtrLifecyclePort struct {
 	mu        sync.Mutex
 	events    []string
 	setErrors map[bool]error
+	setDelays map[bool]time.Duration
 	closeErr  error
 }
 
@@ -23,13 +24,17 @@ func (p *dtrLifecyclePort) SetReadTimeout(time.Duration) error { return nil }
 
 func (p *dtrLifecyclePort) SetDTR(high bool) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if high {
 		p.events = append(p.events, "dtr-high")
 	} else {
 		p.events = append(p.events, "dtr-low")
 	}
-	return p.setErrors[high]
+	delay, err := p.setDelays[high], p.setErrors[high]
+	p.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	return err
 }
 
 func (p *dtrLifecyclePort) Close() error {
@@ -62,7 +67,11 @@ func TestEnableBridgeExitDTRDwellAndCloseOrder(t *testing.T) {
 		t.Fatalf("events after arming = %v, want [dtr-high]", got)
 	}
 
+	closeStarted := time.Now()
 	closeErr := m.Close()
+	if elapsed := time.Since(closeStarted); elapsed > 250*time.Millisecond {
+		t.Fatalf("Close() after a completed arm waited %s, want no additional arm delay", elapsed)
+	}
 	if !errors.Is(closeErr, dtrCloseErr) || !errors.Is(closeErr, portCloseErr) {
 		t.Fatalf("Close() error = %v, want joined DTR and port errors", closeErr)
 	}
@@ -80,15 +89,29 @@ func TestEnableBridgeExitDTRDwellAndCloseOrder(t *testing.T) {
 func TestEnableBridgeExitDTRCancellationCanBeClosed(t *testing.T) {
 	p := &dtrLifecyclePort{setErrors: map[bool]error{}}
 	m := NewWithPort(p)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
+	enableStarted := time.Now()
 	err := m.EnableBridgeExitDTR(ctx)
+	enableElapsed := time.Since(enableStarted)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("EnableBridgeExitDTR() error = %v, want context deadline", err)
 	}
+	if enableElapsed > 250*time.Millisecond {
+		t.Fatalf("cancelled EnableBridgeExitDTR() took %s, want prompt cancellation", enableElapsed)
+	}
+	remaining := bridgeExitDTRArmDelay - time.Since(m.bridgeExitDTRAttemptedAt)
+	closeStarted := time.Now()
 	if err := m.Close(); err != nil {
 		t.Fatalf("Close() after cancelled arming error = %v", err)
+	}
+	closeElapsed := time.Since(closeStarted)
+	if closeElapsed < remaining || closeElapsed > remaining+100*time.Millisecond {
+		t.Fatalf("Close() after cancellation took %s with %s remaining, want only the bounded remaining dwell", closeElapsed, remaining)
+	}
+	if time.Since(enableStarted) < bridgeExitDTRArmDelay {
+		t.Fatalf("cancelled DTR was lowered before the full arm interval")
 	}
 	if got, want := p.recordedEvents(), []string{"dtr-high", "dtr-low", "port-close"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("events = %v, want %v", got, want)
@@ -97,15 +120,26 @@ func TestEnableBridgeExitDTRCancellationCanBeClosed(t *testing.T) {
 
 func TestEnableBridgeExitDTRReturnsHighErrorAndCloseLowersLine(t *testing.T) {
 	setErr := errors.New("asserting DTR failed")
-	p := &dtrLifecyclePort{setErrors: map[bool]error{true: setErr}}
+	p := &dtrLifecyclePort{
+		setErrors: map[bool]error{true: setErr},
+		setDelays: map[bool]time.Duration{true: 80 * time.Millisecond},
+	}
 	m := NewWithPort(p)
 
+	assertStarted := time.Now()
 	err := m.EnableBridgeExitDTR(context.Background())
+	if elapsed := time.Since(assertStarted); elapsed < 80*time.Millisecond {
+		t.Fatalf("SetDTR(true) attempt took %s, want fake delayed failure", elapsed)
+	}
 	if !errors.Is(err, setErr) {
 		t.Fatalf("EnableBridgeExitDTR() error = %v, want DTR assertion cause", err)
 	}
+	closeStarted := time.Now()
 	if err := m.Close(); err != nil {
 		t.Fatalf("Close() after DTR assertion error = %v", err)
+	}
+	if elapsed := time.Since(closeStarted); elapsed < 490*time.Millisecond {
+		t.Fatalf("failed DTR assertion was lowered after %s, want at least 500ms from attempt completion", elapsed)
 	}
 	if got, want := p.recordedEvents(), []string{"dtr-high", "dtr-low", "port-close"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("events = %v, want %v", got, want)

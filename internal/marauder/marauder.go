@@ -58,10 +58,11 @@ type Marauder struct {
 	mu   sync.Mutex
 	// lifecycleMu serializes bridge DTR arming with resource close. DTR is
 	// enabled only for an explicitly configured custom-FAP bridge.
-	lifecycleMu   sync.Mutex
-	bridgeExitDTR bool
-	closed        bool
-	closeErr      error
+	lifecycleMu              sync.Mutex
+	bridgeExitDTR            bool
+	bridgeExitDTRAttemptedAt time.Time
+	closed                   bool
+	closeErr                 error
 	// streamBackpressure bounds how long Stream waits to deliver a line
 	// before giving up on a stalled consumer. Zero means the 2s default;
 	// tests set it small. On expiry Stream stops the device scan (stopscan)
@@ -174,6 +175,7 @@ func (m *Marauder) Close() error {
 
 	var dtrErr error
 	if m.bridgeExitDTR {
+		m.waitForBridgeExitDTRArm()
 		if p, ok := m.port.(bridgeExitDTRPort); ok {
 			if err := p.SetDTR(false); err != nil {
 				dtrErr = fmt.Errorf("lowering bridge-exit DTR: %w", err)

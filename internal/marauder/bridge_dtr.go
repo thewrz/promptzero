@@ -38,8 +38,12 @@ func (m *Marauder) EnableBridgeExitDTR(ctx context.Context) error {
 	// Mark the line as owned before asserting it so Close lowers it even
 	// when SetDTR reports an error after partially changing the device state.
 	m.bridgeExitDTR = true
-	if err := p.SetDTR(true); err != nil {
-		return fmt.Errorf("asserting bridge-exit DTR: %w", err)
+	assertErr := p.SetDTR(true)
+	// A failed ioctl may still have changed the physical line, so begin the
+	// arm interval after the assertion attempt returns in either case.
+	m.bridgeExitDTRAttemptedAt = time.Now()
+	if assertErr != nil {
+		return fmt.Errorf("asserting bridge-exit DTR: %w", assertErr)
 	}
 
 	timer := time.NewTimer(bridgeExitDTRArmDelay)
@@ -50,4 +54,17 @@ func (m *Marauder) EnableBridgeExitDTR(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("waiting for bridge-exit DTR arm delay: %w", ctx.Err())
 	}
+}
+
+// waitForBridgeExitDTRArm gives the FAP the remaining time it needs to arm
+// its falling-edge exit policy. Callers hold lifecycleMu; the wait is capped
+// at bridgeExitDTRArmDelay and never extends a completed dwell.
+func (m *Marauder) waitForBridgeExitDTRArm() {
+	remaining := bridgeExitDTRArmDelay - time.Since(m.bridgeExitDTRAttemptedAt)
+	if remaining <= 0 {
+		return
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	<-timer.C
 }
