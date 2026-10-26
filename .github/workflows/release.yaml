@@ -59,14 +59,14 @@ jobs:
           - { goos: darwin,  goarch: arm64, runner: macos-15,       cgo: 1 }
           - { goos: windows, goarch: amd64, runner: ubuntu-latest,  cgo: 0 }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
           cache: true
 
       - name: Build
@@ -111,7 +111,7 @@ jobs:
         # and emits a deprecation warning on every release run as
         # GitHub forces Node 24 as default 2026-06-02 and removes
         # Node 20 entirely 2026-09-16. Inputs unchanged from v5.
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: build-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
@@ -123,14 +123,14 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
       - name: Download all build artifacts
         # v8 (Mar 2026) — pairs with upload-artifact@v7; same Node 24
         # runtime story. Pattern + merge-multiple inputs unchanged.
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: dist
           pattern: build-*
@@ -146,7 +146,7 @@ jobs:
           cat checksums.txt
 
       - name: Generate SBOM (CycloneDX)
-        uses: anchore/sbom-action@v0.24.0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           path: ./
           format: cyclonedx-json
@@ -170,7 +170,7 @@ jobs:
         # facing implications. v2.6.x is still maintained for security
         # fixes (v2.6.3 shipped April 2026); revisit when the bundle
         # migration is ready.
-        uses: sigstore/cosign-installer@v4.1.1
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
         with:
           cosign-release: v2.6.3
 
@@ -258,7 +258,7 @@ jobs:
           fi
 
       - name: Create release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           body_path: ${{ steps.extract_notes.outputs.notes_file }}
           generate_release_notes: ${{ steps.extract_notes.outputs.notes_file == '' }}
@@ -287,7 +287,7 @@ jobs:
       id-token: write # cosign keyless + OIDC for attestations
       attestations: write # actions/attest-build-provenance
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # Match the binary ldflags: 7-char commit + UTC build date.
       - name: Build metadata
@@ -299,13 +299,13 @@ jobs:
           echo "commit=${COMMIT_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -313,7 +313,7 @@ jobs:
 
       - name: Image metadata (tags + labels)
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -324,7 +324,7 @@ jobs:
 
       - name: Build and push image
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -342,7 +342,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4.1.1
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
         with:
           cosign-release: v2.6.3
 
@@ -355,7 +355,7 @@ jobs:
         run: cosign sign --yes --recursive "${IMAGE}@${DIGEST}"
 
       - name: Attest build provenance (GitHub)
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
