@@ -3,7 +3,7 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-for dependency in python3 cc shellcheck; do
+for dependency in python3 node cc shellcheck; do
     command -v "$dependency" >/dev/null 2>&1 || {
         printf 'Missing hardware test dependency: %s\n' "$dependency" >&2
         exit 1
@@ -13,6 +13,7 @@ done
 shellcheck contrib/linux/promptzero-mcp-wrapper
 python3 -m unittest discover -s contrib/linux -p 'test_*.py'
 python3 -m unittest discover -s scripts -p 'test_mcp_smoke.py'
+node --test contrib/flipper-uart-bridge/tests/marauder_scan.test.cjs
 
 test_dir=$(mktemp -d)
 trap 'rm -rf "$test_dir"' EXIT HUP INT TERM
