@@ -325,18 +325,17 @@ func TestScanStation_StubbedError(t *testing.T) {
 	}
 }
 
-// TestScanAPParsed_Roundtrip pins the parsed wrapper: calls
-// ScanAPParsed, the fake serves a single-AP scanap response, and
-// the parsed ScanResult.APs slice contains the AP. Catches a
-// regression in the Exec → ParseAPList wiring (the legacy blocking
-// entry point that v0.60+ ctx-threading still delegates through).
+// TestScanAPParsed_Roundtrip pins the background-context compatibility
+// wrapper against the current scanall/list/info command sequence.
 func TestScanAPParsed_Roundtrip(t *testing.T) {
-	fp := newFakePort()
-	fp.respond("scanap", "0 SSID=HomeWifi BSSID=AA:BB:CC:DD:EE:FF CH=6 ENC=WPA2 RSSI=-55")
-	m := newMarauderWithPort(fp)
+	port := newScanScriptPort()
+	port.startReply = scanAllAck
+	port.listReply = "[0][CH:6] HomeWifi -55\n0 selected"
+	port.infoReply[0] = "ESSID: HomeWifi\nBSSID: AA:BB:CC:DD:EE:FF\nChannel: 6\nRSSI: -55\nSecurity: WPA2"
+	m := NewWithPort(port)
 	t.Cleanup(func() { _ = m.Close() })
 
-	res, err := m.ScanAPParsed(500 * time.Millisecond)
+	res, err := m.ScanAPParsed(time.Second)
 	if err != nil {
 		t.Fatalf("ScanAPParsed: %v", err)
 	}
@@ -354,19 +353,6 @@ func TestScanAPParsed_Roundtrip(t *testing.T) {
 	}
 	if res.APs[0].RSSI != -55 {
 		t.Errorf("APs[0].RSSI = %d, want -55", res.APs[0].RSSI)
-	}
-
-	// Ctx variant should produce the same parsed shape.
-	fp2 := newFakePort()
-	fp2.respond("scanap", "0 SSID=HomeWifi BSSID=AA:BB:CC:DD:EE:FF CH=6 ENC=WPA2 RSSI=-55")
-	m2 := newMarauderWithPort(fp2)
-	t.Cleanup(func() { _ = m2.Close() })
-	resCtx, err := m2.ScanAPParsedCtx(context.Background(), 500*time.Millisecond)
-	if err != nil {
-		t.Fatalf("ScanAPParsedCtx: %v", err)
-	}
-	if len(resCtx.APs) != 1 || resCtx.APs[0].SSID != "HomeWifi" {
-		t.Errorf("ScanAPParsedCtx APs = %+v, want HomeWifi", resCtx.APs)
 	}
 }
 

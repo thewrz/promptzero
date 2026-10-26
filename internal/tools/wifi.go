@@ -9,33 +9,39 @@ import (
 	"github.com/xunholy/promptzero/internal/streaming"
 )
 
+func wifiAPScanDuration(params map[string]any) time.Duration {
+	seconds := intOr(params, "duration_seconds", 15)
+	if seconds < 1 {
+		seconds = 1
+	}
+	if seconds > 60 {
+		seconds = 60
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 //nolint:gochecknoinits
 func init() {
 	// --- WiFi Scanning ---
 
 	Register(Spec{
 		Name:        "wifi_scan_ap",
-		Description: "Scan for nearby WiFi access points. Returns SSIDs, BSSIDs, channels, signal strength, and encryption type. Uses the ESP32 Marauder WiFi devboard.",
-		Schema:      json.RawMessage(`{"type":"object","properties":{"duration_seconds":{"type":"number","description":"Scan duration in seconds (default 15)"}}}`),
+		Description: "Scan for nearby WiFi access points. Returns SSIDs, BSSIDs, channels, signal strength, security, and hidden-network status. Uses the ESP32 Marauder WiFi devboard; collection duration is clamped to 1–60 seconds and results are capped at 64 APs.",
+		Schema:      json.RawMessage(`{"type":"object","properties":{"duration_seconds":{"type":"number","description":"Scan duration in seconds (default 15, clamped to 1–60)"}}}`),
 		Required:    nil,
 		Risk:        risk.Medium,
 		Group:       GroupMarauderWiFi,
 		AgentOnly:   false,
-		// Streaming opt-in: each scanap line emitted by the Marauder
-		// (typically one per detected AP) lands at the host's stream
-		// callback as a frame in real time. First Marauder-backed
-		// streaming tool — bridges the channel-based Marauder.Stream
-		// API to the same StreamHandler shape used for Flipper
-		// streaming tools via the new Marauder.StreamLines wrapper.
+		// Streaming opt-in: each scanall line emitted by the Marauder
+		// (AP and station rows) lands at the host's stream callback as
+		// a frame in real time. The structured Marauder scan workflow
+		// keeps reading after scanall's immediate startup prompt.
 		Streams: true,
 		Handler: func(ctx context.Context, d *Deps, p map[string]any) (string, error) {
 			if err := d.RequireMarauder(); err != nil {
 				return "", err
 			}
-			// ScanAPParsedCtx threads ctx all the way to the
-			// Marauder read loop so a turn-level cancel (Ctrl+C)
-			// aborts mid-scan instead of blocking until timeout.
-			res, err := d.Marauder.ScanAPParsedCtx(ctx, time.Duration(intOr(p, "duration_seconds", 15))*time.Second)
+			res, err := d.Marauder.ScanAPParsedCtx(ctx, wifiAPScanDuration(p))
 			if err != nil {
 				return "", err
 			}
@@ -47,7 +53,7 @@ func init() {
 			if err := d.RequireMarauder(); err != nil {
 				return "", err
 			}
-			timeout := time.Duration(intOr(p, "duration_seconds", 15)) * time.Second
+			timeout := wifiAPScanDuration(p)
 			res, err := d.Marauder.ScanAPParsedStream(ctx, timeout, func(line string) (stop bool) {
 				sink.Send([]byte(line))
 				return sink.IsAborted()
