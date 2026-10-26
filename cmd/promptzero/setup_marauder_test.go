@@ -74,14 +74,16 @@ func TestConnectMarauderWithOpsUsesBLEAddress(t *testing.T) {
 
 func TestConnectMarauderWithOpsUsesFlipperPortForSingleCableBridge(t *testing.T) {
 	flip := flipper.NewForTest(flipper.Capabilities{})
+	dtrPort := &bridgeExitDTRTestPort{}
 	var gotFlip *flipper.Flipper
 	var gotPort string
 	var gotCommand string
 	var gotSettle, gotReopen time.Duration
-	want := &marauder.Marauder{}
+	var gotOptions marauder.BridgeOptions
+	want := marauder.NewWithPort(dtrPort)
 	ops := marauderConnectOps{
-		bridge: func(_ context.Context, f *flipper.Flipper, port string, _ int, command string, settle, reopen time.Duration) (*marauder.Marauder, error) {
-			gotFlip, gotPort, gotCommand, gotSettle, gotReopen = f, port, command, settle, reopen
+		bridge: func(_ context.Context, f *flipper.Flipper, port string, _ int, command string, settle, reopen time.Duration, options marauder.BridgeOptions) (*marauder.Marauder, error) {
+			gotFlip, gotPort, gotCommand, gotSettle, gotReopen, gotOptions = f, port, command, settle, reopen, options
 			if err := f.Suspend("UART bridge active"); err != nil {
 				return nil, err
 			}
@@ -93,7 +95,7 @@ func TestConnectMarauderWithOpsUsesFlipperPortForSingleCableBridge(t *testing.T)
 		Marauder: config.MarauderConfig{
 			Bridge: true, Port: "/dev/ignored", BaudRate: 115200,
 			BridgeCommand: `loader open "USB-UART Bridge"`,
-			BridgeSettle:  750 * time.Millisecond, BridgePortReopenTimeout: 5 * time.Second,
+			BridgeSettle:  750 * time.Millisecond, BridgePortReopenTimeout: 5 * time.Second, BridgeExitDTR: true,
 		},
 	}
 
@@ -101,11 +103,17 @@ func TestConnectMarauderWithOpsUsesFlipperPortForSingleCableBridge(t *testing.T)
 	if err != nil {
 		t.Fatalf("connectMarauderWithOps() error = %v", err)
 	}
-	if got != want || gotFlip != flip || gotPort != "/dev/ttyACM0" || gotCommand != cfg.Marauder.BridgeCommand || gotSettle != cfg.Marauder.BridgeSettle || gotReopen != cfg.Marauder.BridgePortReopenTimeout {
-		t.Fatalf("bridge result = (%p, %p, %q, %q, %s, %s)", got, gotFlip, gotPort, gotCommand, gotSettle, gotReopen)
+	if got != want || gotFlip != flip || gotPort != "/dev/ttyACM0" || gotCommand != cfg.Marauder.BridgeCommand || gotSettle != cfg.Marauder.BridgeSettle || gotReopen != cfg.Marauder.BridgePortReopenTimeout || !gotOptions.ExitDTR {
+		t.Fatalf("bridge result = (%p, %p, %q, %q, %s, %s, %+v)", got, gotFlip, gotPort, gotCommand, gotSettle, gotReopen, gotOptions)
 	}
 	if !flip.IsSuspended() {
 		t.Fatal("successful single-cable bridge did not preserve Flipper suspension")
+	}
+	if got, wantEvents := strings.Join(dtrPort.events, ","), "dtr-high"; got != wantEvents {
+		t.Fatalf("DTR events = %q, want %q", got, wantEvents)
+	}
+	if err := got.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
 	}
 }
 
@@ -130,7 +138,7 @@ func TestConnectMarauderWithOpsKeepsHybridFlipperActive(t *testing.T) {
 	want := &marauder.Marauder{}
 	ops := marauderConnectOps{
 		flipperKind: func(*flipper.Flipper) string { return "ble" },
-		bridge: func(_ context.Context, f *flipper.Flipper, port string, _ int, _ string, _, _ time.Duration) (*marauder.Marauder, error) {
+		bridge: func(_ context.Context, f *flipper.Flipper, port string, _ int, _ string, _, _ time.Duration, _ marauder.BridgeOptions) (*marauder.Marauder, error) {
 			gotFlip, gotPort = f, port
 			if f.IsSuspended() {
 				t.Fatal("hybrid Flipper was suspended before Marauder bridge connection")
@@ -158,7 +166,7 @@ func TestConnectMarauderWithOpsRejectsSuspendedFlipper(t *testing.T) {
 		t.Fatalf("Suspend() error = %v", err)
 	}
 	called := false
-	ops := marauderConnectOps{bridge: func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration) (*marauder.Marauder, error) {
+	ops := marauderConnectOps{bridge: func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration, marauder.BridgeOptions) (*marauder.Marauder, error) {
 		called = true
 		return &marauder.Marauder{}, nil
 	}}
@@ -243,7 +251,7 @@ func TestConnectMarauderWithOpsPreservesBLEConnectionCause(t *testing.T) {
 func TestConnectMarauderWithOpsPreservesBridgeConnectionCause(t *testing.T) {
 	wantErr := errors.New("bridge app rejected launch")
 	called := false
-	ops := marauderConnectOps{bridge: func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration) (*marauder.Marauder, error) {
+	ops := marauderConnectOps{bridge: func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration, marauder.BridgeOptions) (*marauder.Marauder, error) {
 		called = true
 		return nil, wantErr
 	}}
@@ -268,7 +276,7 @@ func TestConnectMarauderWithOpsRejectsMissingClientWithoutError(t *testing.T) {
 func TestConnectMarauderWithOpsArmsDTROnlyWhenConfigured(t *testing.T) {
 	p := &bridgeExitDTRTestPort{}
 	want := marauder.NewWithPort(p)
-	ops := marauderConnectOps{bridge: func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration) (*marauder.Marauder, error) {
+	ops := marauderConnectOps{bridge: func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration, marauder.BridgeOptions) (*marauder.Marauder, error) {
 		return want, nil
 	}}
 	cfg := &config.Config{Serial: config.SerialConfig{Port: "/dev/ttyACM0"}, Marauder: config.MarauderConfig{Bridge: true, BridgeExitDTR: true}}
@@ -292,7 +300,7 @@ func TestConnectMarauderWithOpsClosesClientWhenDTRArmIsCancelled(t *testing.T) {
 	p := &bridgeExitDTRTestPort{}
 	want := marauder.NewWithPort(p)
 	ctx, cancel := context.WithCancel(context.Background())
-	ops := marauderConnectOps{bridge: func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration) (*marauder.Marauder, error) {
+	ops := marauderConnectOps{bridge: func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration, marauder.BridgeOptions) (*marauder.Marauder, error) {
 		cancel()
 		return want, nil
 	}}

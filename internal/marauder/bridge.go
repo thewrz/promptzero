@@ -50,6 +50,13 @@ var connectFn = Connect
 
 const bridgePeerProbeTimeout = 2 * time.Second
 
+// BridgeOptions controls optional behavior during Flipper bridge setup.
+type BridgeOptions struct {
+	// ExitDTR arms the custom-FAP DTR exit signal before probing the reopened
+	// UART, so every post-open failure can lower DTR and restore the CLI.
+	ExitDTR bool
+}
+
 // bridgeRejectionMarkers is the case-insensitive substring set used to
 // classify a CLI response as "the firmware did not run the bridge app".
 // Each phrase is sourced from a real firmware response in either OFW,
@@ -102,6 +109,21 @@ func ConnectViaFlipper(
 	bridgeCmd string,
 	settle time.Duration,
 	reopenTimeout time.Duration,
+) (*Marauder, error) {
+	return ConnectViaFlipperWithOptions(ctx, flip, portName, baudRate, bridgeCmd, settle, reopenTimeout, BridgeOptions{})
+}
+
+// ConnectViaFlipperWithOptions is ConnectViaFlipper with optional lifecycle
+// behavior applied before the reopened port is verified.
+func ConnectViaFlipperWithOptions(
+	ctx context.Context,
+	flip bridgeFlipper,
+	portName string,
+	baudRate int,
+	bridgeCmd string,
+	settle time.Duration,
+	reopenTimeout time.Duration,
+	options BridgeOptions,
 ) (*Marauder, error) {
 	if flip == nil {
 		return nil, errors.New("flipper handle required for bridge mode")
@@ -191,13 +213,15 @@ func ConnectViaFlipper(
 		if oerr == nil {
 			if m == nil {
 				lastErr = errors.New("reopen returned nil Marauder without an error")
-			} else if err := verifyBridgePeer(ctx, m); err != nil {
-				closeErr := m.Close()
-				if closeErr != nil {
-					err = errors.Join(err, fmt.Errorf("closing unverified port: %w", closeErr))
-				}
-				return nil, fmt.Errorf("verifying reopened Marauder on %s: %w", portName, err)
 			} else {
+				if options.ExitDTR {
+					if err := m.EnableBridgeExitDTR(ctx); err != nil {
+						return nil, fmt.Errorf("arming bridge exit DTR: %w", closeBridgePortOnFailure(m, err))
+					}
+				}
+				if err := verifyBridgePeer(ctx, m); err != nil {
+					return nil, fmt.Errorf("verifying reopened Marauder on %s: %w", portName, closeBridgePortOnFailure(m, err))
+				}
 				return m, nil
 			}
 		} else {
@@ -210,6 +234,13 @@ func ConnectViaFlipper(
 		}
 	}
 	return nil, fmt.Errorf("reopening %s after bridge launch: %w", portName, lastErr)
+}
+
+func closeBridgePortOnFailure(m *Marauder, cause error) error {
+	if closeErr := m.Close(); closeErr != nil {
+		cause = errors.Join(cause, fmt.Errorf("closing unverified port: %w", closeErr))
+	}
+	return cause
 }
 
 func verifyBridgePeer(ctx context.Context, m *Marauder) error {

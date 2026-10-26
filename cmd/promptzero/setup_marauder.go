@@ -18,7 +18,7 @@ import (
 type marauderConnectOps struct {
 	serial      func(string, int) (*marauder.Marauder, error)
 	ble         func(context.Context, string) (*marauder.Marauder, error)
-	bridge      func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration) (*marauder.Marauder, error)
+	bridge      func(context.Context, *flipper.Flipper, string, int, string, time.Duration, time.Duration, marauder.BridgeOptions) (*marauder.Marauder, error)
 	flipperKind func(*flipper.Flipper) string
 }
 
@@ -27,8 +27,8 @@ func productionMarauderConnectOps() marauderConnectOps {
 		serial:      marauder.Connect,
 		ble:         marauder.ConnectBLE,
 		flipperKind: transportKind,
-		bridge: func(ctx context.Context, flip *flipper.Flipper, port string, baud int, command string, settle, reopen time.Duration) (*marauder.Marauder, error) {
-			return marauder.ConnectViaFlipper(ctx, flip, port, baud, command, settle, reopen)
+		bridge: func(ctx context.Context, flip *flipper.Flipper, port string, baud int, command string, settle, reopen time.Duration, options marauder.BridgeOptions) (*marauder.Marauder, error) {
+			return marauder.ConnectViaFlipperWithOptions(ctx, flip, port, baud, command, settle, reopen, options)
 		},
 	}
 }
@@ -67,7 +67,7 @@ func connectMarauderWithOps(ctx context.Context, cfg *config.Config, flip *flipp
 		if err != nil {
 			return nil, err
 		}
-		m, err := ops.bridge(ctx, flip, port, cfg.Marauder.BaudRate, cfg.Marauder.BridgeCommand, cfg.Marauder.BridgeSettle, cfg.Marauder.BridgePortReopenTimeout)
+		m, err := ops.bridge(ctx, flip, port, cfg.Marauder.BaudRate, cfg.Marauder.BridgeCommand, cfg.Marauder.BridgeSettle, cfg.Marauder.BridgePortReopenTimeout, marauder.BridgeOptions{ExitDTR: cfg.Marauder.BridgeExitDTR})
 		if err != nil {
 			return nil, fmt.Errorf("connecting Marauder via Flipper bridge on %s: %w", port, err)
 		}

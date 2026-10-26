@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,6 +81,25 @@ func makeFakeMarauder() *Marauder {
 	p := newFakePort()
 	p.respond("info", "Firmware: Marauder\r\nVersion: v1.19.1\r\nHardware: Flipper Zero Dev Board\r\nApp partition: app0\r\nESP-IDF: v4.4.5\r\n")
 	return newMarauderWithPort(p)
+}
+
+type bridgeDTRProbePort struct {
+	*fakePort
+	mu     sync.Mutex
+	events []bool
+}
+
+func (p *bridgeDTRProbePort) SetDTR(high bool) error {
+	p.mu.Lock()
+	p.events = append(p.events, high)
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *bridgeDTRProbePort) dtrEvents() []bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]bool(nil), p.events...)
 }
 
 type unconfirmedBridgeHandoffError struct{}
@@ -173,6 +194,83 @@ func TestConnectViaFlipper_RejectsWrongPeerAndClosesPort(t *testing.T) {
 	p.mu.Unlock()
 	if !closed {
 		t.Fatal("reopened wrong-peer port was not closed")
+	}
+}
+
+func TestConnectViaFlipperWithOptionsArmsDTRBeforeWrongPeerCleanup(t *testing.T) {
+	flip := &fakeBridgeFlipper{execResp: scriptedOK, transport: &stubTransport{kind: "serial"}}
+	p := newFakePort()
+	p.respond("info", "Other firmware v1.0.0\n")
+	tracked := &bridgeDTRProbePort{fakePort: p}
+	var dtrAtProbe []bool
+	p.onWrite = func(cmd string) {
+		if cmd == "info" {
+			dtrAtProbe = tracked.dtrEvents()
+		}
+	}
+	withConnectFn(t, func(_ string, _ int) (*Marauder, error) { return NewWithPort(tracked), nil })
+	started := time.Now()
+
+	m, err := ConnectViaFlipperWithOptions(context.Background(), flip, "/dev/ttyACM0", 115200, "", fastSettle, fastReopen, BridgeOptions{ExitDTR: true})
+	if err == nil || m != nil {
+		t.Fatalf("ConnectViaFlipperWithOptions() = (%p, %v), want wrong-peer error", m, err)
+	}
+	if elapsed := time.Since(started); elapsed < bridgeExitDTRArmDelay {
+		t.Fatalf("failed peer cleanup took %s, want at least %s for DTR arm", elapsed, bridgeExitDTRArmDelay)
+	}
+	if got, want := tracked.dtrEvents(), []bool{true, false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("DTR events = %v, want %v", got, want)
+	}
+	if got, want := dtrAtProbe, []bool{true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("DTR at info probe = %v, want %v", got, want)
+	}
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if !closed {
+		t.Fatal("reopened wrong-peer port was not closed")
+	}
+}
+
+func TestConnectViaFlipperWithOptionsCancellationClosesDTRAfterArmDelay(t *testing.T) {
+	flip := &fakeBridgeFlipper{execResp: scriptedOK, transport: &stubTransport{kind: "serial"}}
+	p := newFakePort()
+	tracked := &bridgeDTRProbePort{fakePort: p}
+	withConnectFn(t, func(_ string, _ int) (*Marauder, error) { return NewWithPort(tracked), nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+
+	m, err := ConnectViaFlipperWithOptions(ctx, flip, "/dev/ttyACM0", 115200, "", fastSettle, fastReopen, BridgeOptions{ExitDTR: true})
+	if !errors.Is(err, context.DeadlineExceeded) || m != nil {
+		t.Fatalf("ConnectViaFlipperWithOptions() = (%p, %v), want canceled cleanup", m, err)
+	}
+	if elapsed := time.Since(started); elapsed < bridgeExitDTRArmDelay {
+		t.Fatalf("canceled connector cleanup took %s, want at least %s", elapsed, bridgeExitDTRArmDelay)
+	}
+	if got, want := tracked.dtrEvents(), []bool{true, false}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("DTR events = %v, want %v", got, want)
+	}
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if !closed {
+		t.Fatal("reopened port was not closed after canceled DTR arm")
+	}
+}
+
+func TestConnectViaFlipperWithoutOptionsDoesNotTouchDTR(t *testing.T) {
+	flip := &fakeBridgeFlipper{execResp: scriptedOK, transport: &stubTransport{kind: "serial"}}
+	p := newFakePort()
+	p.respond("info", "Other firmware v1.0.0\n")
+	tracked := &bridgeDTRProbePort{fakePort: p}
+	withConnectFn(t, func(_ string, _ int) (*Marauder, error) { return NewWithPort(tracked), nil })
+
+	if _, err := ConnectViaFlipper(context.Background(), flip, "/dev/ttyACM0", 115200, "", fastSettle, fastReopen); err == nil {
+		t.Fatal("ConnectViaFlipper() error = nil, want wrong-peer error")
+	}
+	if got := tracked.dtrEvents(); len(got) != 0 {
+		t.Fatalf("DTR events = %v, want no DTR operations without opt-in", got)
 	}
 }
 
