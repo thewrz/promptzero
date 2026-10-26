@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/xunholy/promptzero/internal/flipper"
 	"github.com/xunholy/promptzero/internal/risk"
@@ -18,8 +19,11 @@ func init() {
 		Group:       GroupFlipperSystem,
 		AgentOnly:   false,
 		Handler: func(ctx context.Context, d *Deps, p map[string]any) (string, error) {
+			content, ok := p["content"].(string)
+			if !ok {
+				return "", fmt.Errorf("storage_write: content must be a string")
+			}
 			path, _ := p["path"].(string)
-			content, _ := p["content"].(string)
 			d.SnapshotBeforeWrite(ctx, path)
 			if err := d.Flipper.StorageWriteCtx(ctx, path, content); err != nil {
 				return "", err

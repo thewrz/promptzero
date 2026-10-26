@@ -276,6 +276,28 @@ func TestServer_CallTool_StorageWriteAllowsExplicitEmptyContent(t *testing.T) {
 			}
 		})
 	}
+	nonStringContent := []struct {
+		name    string
+		content any
+	}{
+		{name: "number", content: 42},
+		{name: "boolean", content: false},
+		{name: "object", content: map[string]any{"value": "text"}},
+	}
+	for _, tc := range nonStringContent {
+		t.Run("non-string content "+tc.name, func(t *testing.T) {
+			var req mcplib.CallToolRequest
+			req.Params.Name = "storage_write"
+			req.Params.Arguments = map[string]any{"path": "/ext/apps_data/empty.txt", "content": tc.content}
+			res, err := c.CallTool(ctx, req)
+			if err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			if !res.IsError || !strings.Contains(firstText(t, res), "content must be a string") {
+				t.Fatalf("non-string content was not rejected: IsError=%v result=%q", res.IsError, firstText(t, res))
+			}
+		})
+	}
 
 	var req mcplib.CallToolRequest
 	req.Params.Name = "storage_write"
