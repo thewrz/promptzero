@@ -133,7 +133,7 @@ func parseAPLine(line string) (AccessPoint, bool) {
 		if indexErr != nil || channelErr != nil || rssiErr != nil {
 			return AccessPoint{}, false
 		}
-		ssid := strings.Trim(strings.TrimSpace(matches[3]), `"'`)
+		ssid := strings.TrimSpace(matches[3])
 		ap.Index = index
 		ap.SSID = ssid
 		ap.Channel = channel

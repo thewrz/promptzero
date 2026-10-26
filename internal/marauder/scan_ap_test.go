@@ -294,6 +294,41 @@ func TestParseAPList_BracketedMarauderList(t *testing.T) {
 	}
 }
 
+func TestParseAPList_BracketedSSIDKeepsLiteralQuotes(t *testing.T) {
+	const line = "[0][CH:6] 'lab' -54"
+	res := ParseAPList(line)
+	if res.Count != 1 || len(res.APs) != 1 {
+		t.Fatalf("ParseAPList count = %d, APs=%+v; want one row", res.Count, res.APs)
+	}
+	if got := res.APs[0].SSID; got != "'lab'" {
+		t.Errorf("SSID = %q, want literal apostrophes retained", got)
+	}
+	if got := res.APs[0].RawLine; got != line {
+		t.Errorf("RawLine = %q, want original line %q", got, line)
+	}
+}
+
+func TestScanAPParsedStream_InfoPreservesSSIDQuotes(t *testing.T) {
+	port := newScanScriptPort()
+	port.startReply = scanAllAck
+	port.scanLines = "-53 Ch: 6 aa:bb:cc:dd:ee:01 ESSID: 'lab' 31 10"
+	port.listReply = "[0][CH:6] 'lab' -54\n0 selected"
+	port.infoReply[0] = "ESSID: 'lab'\nBSSID: AA:BB:CC:DD:EE:01\nChannel: 6\nRSSI: -54\nSecurity: WPA2"
+	m := NewWithPort(port)
+	t.Cleanup(func() { _ = m.Close() })
+
+	res, err := m.ScanAPParsedStream(context.Background(), 60*time.Second, func(line string) bool { return strings.HasPrefix(line, "-") })
+	if err != nil {
+		t.Fatalf("ScanAPParsedStream: %v", err)
+	}
+	if res.Count != 1 || res.APs[0].SSID != "'lab'" {
+		t.Fatalf("enriched AP SSID = %#v, want literal apostrophes retained", res.APs)
+	}
+	if res.APs[0].RawLine != "[0][CH:6] 'lab' -54" {
+		t.Errorf("list evidence was changed: RawLine = %q", res.APs[0].RawLine)
+	}
+}
+
 // scanScriptPort models the serial boundary while keeping scan collection
 // asynchronous: scanall acknowledges immediately, then emits scan rows.
 type scanScriptPort struct {
