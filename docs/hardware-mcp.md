@@ -95,8 +95,10 @@ risk override. Evidence files are created with mode 0600 and are never
 overwritten. They include raw device output and nearby network identifiers;
 keep them local.
 
-The scanner runs `scanall` for the requested interval even when firmware
-immediately returns a prompt, sends `stopscan`, then reads `list -a` and
+The scanner first sends `stopscan` to leave any previous mode (including the
+Marauder `info` display), then runs `scanall` for the requested interval even
+when firmware immediately returns a prompt. It requires the scan-start banner,
+sends `stopscan` at the end, then reads `list -a` and
 `info -a` details. Each AP includes `ssid`, `bssid`, `channel`, `rssi`, `security`
 (the firmware's auth label), and `hidden`. Raw evidence is retained. At most
 64 APs are enriched; `truncated` and `limit` identify a capped result.
@@ -105,7 +107,9 @@ not an empty successful scan. `list -a` alone only reads stored results.
 
 The stock-JS fallback `contrib/flipper-uart-bridge/marauder_scan.js` also starts
 and stops a fresh five-second scan before reading results. It prints raw detail
-for indexes 0–10 and states that limit. Use the MCP operation above for structured
+for up to 11 indexes actually returned by `list -a` and states that limit.
+It requires a scan-start acknowledgement and never probes nonexistent indexes,
+which can crash Marauder v1.19.1. Use the MCP operation above for structured
 results and the larger 64-AP bound. Run the JS fallback in Flipper-only mode;
 the bridge app and JS serial module cannot own the GPIO UART simultaneously.
 
