@@ -36,7 +36,7 @@ class SmokeClientTests(unittest.TestCase):
             "  else: continue\n"
             "  if 'id' in req: print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':result}),flush=True)\n"
             "with open(os.environ['FAKE_ENV'], 'w') as f:\n"
-            " json.dump({k:os.environ.get(k) for k in ('PROMPTZERO_MCP_ALLOW_HIGH','PROMPTZERO_MCP_ALLOW_CRITICAL','ANTHROPIC_API_KEY','OPENROUTER_API_KEY')},f)\n"
+            " json.dump({'env':{k:os.environ.get(k) for k in ('FLIPPER_PORT','PROMPTZERO_MCP_ALLOW_HIGH','PROMPTZERO_MCP_ALLOW_CRITICAL','ANTHROPIC_API_KEY','OPENROUTER_API_KEY')},'argv':sys.argv[1:]},f)\n"
         )
         self.server.chmod(0o755)
         self.requests = self.root / "requests.jsonl"
@@ -47,6 +47,7 @@ class SmokeClientTests(unittest.TestCase):
             {
                 "FAKE_REQUESTS": str(self.requests),
                 "FAKE_ENV": str(self.child_env),
+                "FLIPPER_PORT": "/dev/wrong",
                 "PROMPTZERO_MCP_ALLOW_HIGH": "1",
                 "PROMPTZERO_MCP_ALLOW_CRITICAL": "1",
                 "ANTHROPIC_API_KEY": "test-only-secret",
@@ -83,6 +84,10 @@ class SmokeClientTests(unittest.TestCase):
         self.assertEqual(report["tool"], "device_info")
         self.assertEqual(report["raw_evidence"]["exit_status"], 0)
         self.assertIn("device health ok", json.dumps(report["raw_evidence"]))
+        self.assertEqual(
+            json.loads(self.child_env.read_text())["argv"],
+            ["--mcp", "--no-wifi", "--port", "/dev/fake"],
+        )
         requests = [json.loads(line) for line in self.requests.read_text().splitlines()]
         self.assertEqual(
             [r["method"] for r in requests],
@@ -92,8 +97,9 @@ class SmokeClientTests(unittest.TestCase):
             requests[-1]["params"], {"name": "device_info", "arguments": {}}
         )
         self.assertEqual(
-            json.loads(self.child_env.read_text()),
+            json.loads(self.child_env.read_text())["env"],
             {
+                "FLIPPER_PORT": "/dev/fake",
                 "PROMPTZERO_MCP_ALLOW_HIGH": None,
                 "PROMPTZERO_MCP_ALLOW_CRITICAL": None,
                 "ANTHROPIC_API_KEY": None,
@@ -102,7 +108,9 @@ class SmokeClientTests(unittest.TestCase):
         )
 
     def test_explicit_wifi_smoke_uses_bounded_scan_duration(self) -> None:
-        result = self.run_client("--tool", "wifi_scan_ap", "--duration", "2")
+        result = self.run_client(
+            "--tool", "wifi_scan_ap", "--mode", "wifi", "--duration", "2"
+        )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         requests = [json.loads(line) for line in self.requests.read_text().splitlines()]
@@ -110,6 +118,42 @@ class SmokeClientTests(unittest.TestCase):
             requests[-1]["params"],
             {"name": "wifi_scan_ap", "arguments": {"duration_seconds": 2}},
         )
+        self.assertEqual(
+            json.loads(self.child_env.read_text())["argv"],
+            ["--mcp", "--wifi", "--port", "/dev/fake"],
+        )
+
+    def test_wifi_bridge_command_and_dtr_options_are_forwarded(self) -> None:
+        result = self.run_client(
+            "--tool",
+            "wifi_scan_ap",
+            "--mode",
+            "wifi",
+            "--bridge-command",
+            "loader open test-bridge",
+            "--bridge-exit-dtr",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(self.child_env.read_text())["argv"],
+            [
+                "--mcp",
+                "--wifi",
+                "--marauder-bridge",
+                "--marauder-bridge-command",
+                "loader open test-bridge",
+                "--marauder-bridge-exit-dtr",
+                "--port",
+                "/dev/fake",
+            ],
+        )
+
+    def test_bridge_options_are_rejected_when_wifi_is_off(self) -> None:
+        result = self.run_client("--bridge-exit-dtr")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.report.exists())
 
     def test_high_or_critical_annotation_prevents_the_tool_call(self) -> None:
         self.server.write_text(

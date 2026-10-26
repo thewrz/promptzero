@@ -186,6 +186,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--tool", choices=sorted(ALLOWED_TOOLS), default="device_info")
     parser.add_argument(
+        "--mode",
+        choices=("flipper-only", "wifi"),
+        help="override the mode inferred from --tool",
+    )
+    parser.add_argument(
+        "--bridge",
+        action="store_true",
+        help="connect the Wi-Fi devboard through the Flipper UART bridge",
+    )
+    parser.add_argument(
+        "--bridge-command",
+        help="override the configured Flipper command that opens the UART bridge",
+    )
+    parser.add_argument(
+        "--bridge-exit-dtr",
+        action="store_true",
+        help="arm DTR close-to-exit for the Flipper UART bridge",
+    )
+    parser.add_argument(
         "--duration", type=int, default=3, help="wifi_scan_ap duration, 1–15 seconds"
     )
     parser.add_argument(
@@ -203,6 +222,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--duration must be between 1 and 15 seconds")
     if not 0.1 <= args.timeout <= 300:
         parser.error("--timeout must be between 0.1 and 300 seconds")
+    expected_mode = "flipper-only" if args.tool == "device_info" else "wifi"
+    if args.mode is not None and args.mode != expected_mode:
+        parser.error(f"tool {args.tool!r} requires mode {expected_mode!r}")
+    if args.bridge_command is not None and not args.bridge_command.strip():
+        parser.error("--bridge-command cannot be empty")
+    if expected_mode == "flipper-only" and (
+        args.bridge or args.bridge_command is not None or args.bridge_exit_dtr
+    ):
+        parser.error("bridge options require Wi-Fi mode")
     return args
 
 
@@ -270,6 +298,24 @@ def report_path(requested: pathlib.Path | None) -> pathlib.Path:
     return pathlib.Path.cwd() / f"promptzero-mcp-smoke-{stamp}.json"
 
 
+def command_args(args: argparse.Namespace) -> list[str]:
+    mode = args.mode or ("flipper-only" if args.tool == "device_info" else "wifi")
+    command = [args.command, "--mcp"]
+    if mode == "flipper-only":
+        command.append("--no-wifi")
+    else:
+        command.append("--wifi")
+        bridge = args.bridge or args.bridge_command is not None or args.bridge_exit_dtr
+        if bridge:
+            command.append("--marauder-bridge")
+        if args.bridge_command is not None:
+            command.extend(("--marauder-bridge-command", args.bridge_command))
+        if args.bridge_exit_dtr:
+            command.append("--marauder-bridge-exit-dtr")
+    command.extend(("--port", args.port))
+    return command
+
+
 def save_report(path: pathlib.Path, report: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -282,17 +328,19 @@ def save_report(path: pathlib.Path, report: dict[str, Any]) -> None:
 def run(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     started = dt.datetime.now(dt.timezone.utc)
+    command = command_args(args)
     evidence: dict[str, Any] = {"requests": [], "responses": [], "stderr": ""}
     report: dict[str, Any] = {
         "schema_version": 1,
         "started_at": started.isoformat(),
-        "command": [args.command, "--mcp", "--port", args.port],
+        "command": command,
         "port": args.port,
         "tool": args.tool,
         "status": "error",
         "raw_evidence": evidence,
     }
     child_env = os.environ.copy()
+    child_env["FLIPPER_PORT"] = args.port
     for key in (
         "PROMPTZERO_MCP_ALLOW_HIGH",
         "PROMPTZERO_MCP_ALLOW_CRITICAL",
@@ -303,9 +351,7 @@ def run(argv: list[str] | None = None) -> int:
     client: MCPProcess | None = None
     error: str | None = None
     try:
-        client = MCPProcess(
-            [args.command, "--mcp", "--port", args.port], child_env, args.timeout
-        )
+        client = MCPProcess(command, child_env, args.timeout)
         result = call_selected_tool(client, args.tool, args.duration)
         report["result"] = result
         report["status"] = "ok"

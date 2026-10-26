@@ -122,7 +122,16 @@ class WrapperTests(unittest.TestCase):
     def test_missing_stty_dependency_has_actionable_error(self) -> None:
         isolated = self.root / "path"
         isolated.mkdir()
-        for command in ("id", "mkdir", "chmod", "readlink", "stat", "flock", "sleep"):
+        for command in (
+            "id",
+            "mkdir",
+            "chmod",
+            "readlink",
+            "stat",
+            "cksum",
+            "flock",
+            "sleep",
+        ):
             source = shutil.which(command)
             if source:
                 (isolated / command).symlink_to(source)
@@ -200,6 +209,43 @@ class WrapperTests(unittest.TestCase):
         self._wait_for(self.child_record)
 
         result = self.run_wrapper("--mcp", env=self.env)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already in use", result.stderr)
+        self.assertIn(str(first.pid), result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_by_id_alias_retarget_keeps_lock_and_child_stable(self) -> None:
+        by_id = self.root / "dev" / "serial" / "by-id"
+        by_id.mkdir(parents=True)
+        stable_alias = by_id / "usb-Flipper-test"
+        stable_alias.symlink_to(self.device.path)
+        env = self.env.copy()
+        env["FLIPPER_PORT"] = str(stable_alias)
+        env["CHILD_HOLD"] = "1"
+        first = subprocess.Popen(
+            [str(WRAPPER), "--mcp"],
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.addCleanup(self._stop, first)
+        self._wait_for(self.child_record)
+        first_args = __import__("json").loads(self.child_record.read_text())
+        self.assertEqual(first_args[-1], str(stable_alias))
+
+        replacement = by_id / "replacement"
+        replacement.symlink_to(self.root / "other-pty")
+        other = Device()
+        self.addCleanup(other.close)
+        replacement.unlink()
+        replacement.symlink_to(other.path)
+        replacement.replace(stable_alias)
+
+        second_env = env.copy()
+        second_env.pop("CHILD_HOLD")
+        result = self.run_wrapper("--mcp", env=second_env)
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("already in use", result.stderr)
