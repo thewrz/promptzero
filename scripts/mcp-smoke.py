@@ -17,8 +17,9 @@ import time
 from typing import Any
 
 PROTOCOL_VERSION = "2026-07-28"
-MAX_LINE_BYTES = 1_048_576
+MAX_LINE_BYTES = 8 * 1_048_576
 STDERR_LIMIT_BYTES = 32_768
+TERMINATION_GRACE_SECONDS = 3.0
 ALLOWED_TOOLS = {"device_info", "wifi_scan_ap"}
 
 
@@ -145,7 +146,7 @@ class MCPProcess:
             except subprocess.TimeoutExpired:
                 self._signal_group(signal.SIGTERM)
                 try:
-                    self.process.wait(timeout=0.5)
+                    self.process.wait(timeout=TERMINATION_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:
                     self._signal_group(signal.SIGKILL)
                     self.process.wait(timeout=1)

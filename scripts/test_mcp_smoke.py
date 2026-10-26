@@ -30,7 +30,14 @@ class SmokeClientTests(unittest.TestCase):
             "  if req.get('method') == 'initialize':\n"
             "   result={'protocolVersion':'2026-07-28','capabilities':{'tools':{}},'serverInfo':{'name':'PromptZero','version':'test'}}\n"
             "  elif req.get('method') == 'tools/list':\n"
-            "   result={'tools':[{'name':'device_info','annotations':{'title':'device_info (low)','readOnlyHint':True,'destructiveHint':False}},{'name':'wifi_scan_ap','annotations':{'title':'wifi_scan_ap (medium)','readOnlyHint':False,'destructiveHint':False}}]}\n"
+            "   if os.environ.get('FAKE_LARGE_CATALOG') == '1':\n"
+            "    details='Representative input documentation for request validation, safe hardware access, output fields, and timing limits. ' * 8\n"
+            "    properties={f'field_{i}':{'type':'string','description':details} for i in range(8)}\n"
+            "    tools=[{'name':f'catalog_tool_{i:03d}','description':details,'inputSchema':{'type':'object','properties':properties},'annotations':{'title':f'catalog_tool_{i:03d} (low)','readOnlyHint':True,'destructiveHint':False}} for i in range(706)]\n"
+            "    tools.extend([{'name':'device_info','description':'Get device status.','inputSchema':{'type':'object','properties':{}},'annotations':{'title':'device_info (low)','readOnlyHint':True,'destructiveHint':False}},{'name':'wifi_scan_ap','description':'Scan nearby access points.','inputSchema':{'type':'object','properties':{}},'annotations':{'title':'wifi_scan_ap (medium)','readOnlyHint':False,'destructiveHint':False}}])\n"
+            "    result={'tools':tools}\n"
+            "   else:\n"
+            "    result={'tools':[{'name':'device_info','annotations':{'title':'device_info (low)','readOnlyHint':True,'destructiveHint':False}},{'name':'wifi_scan_ap','annotations':{'title':'wifi_scan_ap (medium)','readOnlyHint':False,'destructiveHint':False}}]}\n"
             "  elif req.get('method') == 'tools/call':\n"
             "   result={'content':[{'type':'text','text':'device health ok'}],'isError':False}\n"
             "  else: continue\n"
@@ -149,6 +156,24 @@ class SmokeClientTests(unittest.TestCase):
             ],
         )
 
+    def test_catalog_over_one_mib_still_lists_and_calls_device_info(self) -> None:
+        self.env["FAKE_LARGE_CATALOG"] = "1"
+
+        result = self.run_client()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(self.report.read_text())
+        list_response = next(
+            line
+            for line in report["raw_evidence"]["responses"]
+            if json.loads(line).get("id") == 2
+        )
+        self.assertGreater(len(list_response.encode()), 1_048_576)
+        self.assertEqual(
+            report["raw_evidence"]["requests"][-1]["params"]["name"], "device_info"
+        )
+        self.assertEqual(report["status"], "ok")
+
     def test_bridge_options_are_rejected_when_wifi_is_off(self) -> None:
         result = self.run_client("--bridge-exit-dtr")
 
@@ -228,7 +253,7 @@ class SmokeClientTests(unittest.TestCase):
     def test_oversized_mcp_line_is_rejected_with_bounded_buffer(self) -> None:
         body = self.server.read_text().replace(
             "print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':result}),flush=True)",
-            "print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':result}) + (' ' * 1100000),flush=True)",
+            "print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':result}) + (' ' * 8388609),flush=True)",
         )
         self.server.write_text(body)
         started = time.monotonic()
@@ -238,6 +263,56 @@ class SmokeClientTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("exceeded", json.loads(self.report.read_text())["error"])
         self.assertLess(time.monotonic() - started, 2)
+
+    def test_child_gets_shutdown_grace_to_finish_cleanup(self) -> None:
+        graceful = self.root / "graceful-server"
+        graceful.write_text(
+            "#!/usr/bin/python3\n"
+            "import json, os, signal, sys, time\n"
+            "def stop(*_):\n"
+            " time.sleep(0.7)\n"
+            " with open(os.environ['CLEANUP_MARKER'],'w') as f: f.write('done')\n"
+            " sys.exit(0)\n"
+            "signal.signal(signal.SIGTERM, stop)\n"
+            "for line in sys.stdin:\n"
+            " req=json.loads(line); method=req.get('method')\n"
+            " if method == 'initialize': result={'protocolVersion':'2026-07-28','capabilities':{},'serverInfo':{'name':'PromptZero','version':'test'}}\n"
+            " elif method == 'tools/list': result={'tools':[{'name':'device_info','annotations':{'title':'device_info (low)','destructiveHint':False}}]}\n"
+            " elif method == 'tools/call': result={'content':[{'type':'text','text':'ok'}],'isError':False}\n"
+            " else: continue\n"
+            " if 'id' in req: print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':result}),flush=True)\n"
+            "while True: time.sleep(10)\n"
+        )
+        graceful.chmod(0o755)
+        env = self.env.copy()
+        marker = self.root / "cleanup-complete"
+        env["CLEANUP_MARKER"] = str(marker)
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(CLIENT),
+                "--command",
+                str(graceful),
+                "--port",
+                "/dev/fake",
+                "--report",
+                str(self.report),
+                "--timeout",
+                "0.2",
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=3,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(marker.read_text(), "done")
+        self.assertEqual(
+            json.loads(self.report.read_text())["raw_evidence"]["exit_status"], 0
+        )
 
 
 if __name__ == "__main__":
