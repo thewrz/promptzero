@@ -97,6 +97,11 @@ tasks:
     cmds:
       - go test -race -count=1 ./...
 
+  hardware:test:
+    desc: Linux launcher and MCP process tests plus sanitized bridge policy tests (no device needed).
+    cmds:
+      - sh scripts/check-hardware.sh
+
   ci:
     # The locally-reproducible subset of what CI gates on, in one command,
     # so a contributor can validate before pushing. The cross-compile

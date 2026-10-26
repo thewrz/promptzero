@@ -31,6 +31,13 @@ permissions:
 # targets Node.js 24, matching the GitHub-hosted runner default.
 
 jobs:
+  hardware-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Check launcher, MCP protocol, and bridge policy
+        run: sh scripts/check-hardware.sh
+
   build:
     runs-on: ubuntu-latest
     strategy:

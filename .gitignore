@@ -11,6 +11,7 @@ zeropilot
 *.dylib
 *.test
 *.out
+__pycache__/
 go.work
 go.work.sum
 
