@@ -47,7 +47,8 @@ void bridge_lifecycle_init(BridgeLifecycle* lifecycle) {
 }
 
 static void bridge_lifecycle_update_arming(BridgeLifecycle* lifecycle, uint32_t now) {
-    if(lifecycle->connected && lifecycle->dtr_high && lifecycle->high_since_valid &&
+    if(lifecycle->connected && lifecycle->dtr_close_ready && lifecycle->dtr_high &&
+       lifecycle->high_since_valid &&
        (uint32_t)(now - lifecycle->high_since) >= BRIDGE_DTR_ARM_DWELL_MS) {
         lifecycle->armed = true;
     }
@@ -57,6 +58,7 @@ void bridge_lifecycle_set_connected(BridgeLifecycle* lifecycle, bool connected, 
     if(!connected) bridge_lifecycle_update_arming(lifecycle, now);
     lifecycle->connected = connected;
     if(!connected) {
+        lifecycle->dtr_close_ready = true;
         lifecycle->dtr_high = false;
         lifecycle->high_since_valid = false;
         if(lifecycle->armed) bridge_lifecycle_request_stop(lifecycle, BridgeStopDisconnect);
@@ -64,9 +66,8 @@ void bridge_lifecycle_set_connected(BridgeLifecycle* lifecycle, bool connected, 
 }
 
 void bridge_lifecycle_set_dtr(BridgeLifecycle* lifecycle, bool high, uint32_t now) {
-    if(!lifecycle->connected) return;
-
     if(high) {
+        if(!lifecycle->connected || !lifecycle->dtr_close_ready) return;
         if(!lifecycle->dtr_high) {
             lifecycle->dtr_high = true;
             lifecycle->high_since = now;
@@ -75,10 +76,11 @@ void bridge_lifecycle_set_dtr(BridgeLifecycle* lifecycle, bool high, uint32_t no
         return;
     }
 
-    bridge_lifecycle_update_arming(lifecycle, now);
+    if(lifecycle->connected) bridge_lifecycle_update_arming(lifecycle, now);
     if(lifecycle->dtr_high && lifecycle->armed) {
         bridge_lifecycle_request_stop(lifecycle, BridgeStopDtr);
     }
+    lifecycle->dtr_close_ready = true;
     lifecycle->dtr_high = false;
     lifecycle->high_since_valid = false;
 }

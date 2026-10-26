@@ -6,9 +6,12 @@ as a GPIO UART passthrough. The original app source, manifest, and icon were
 preserved as the starting point; this fork adds bounded transport queues,
 completion-driven USB packets, loss reporting, and lifecycle handling.
 
-The host requests shutdown by keeping DTR high for 500 ms after USB connects,
-then lowering it. A disconnect exits after the bridge has armed; transient
-startup disconnects are ignored. UART traffic remains byte-transparent.
+The bridge ignores an initial DTR-high snapshot until it has observed DTR low
+or a USB disconnect. This allows a CLI-to-bridge USB handoff without treating
+the CLI's preexisting high DTR as a close request. Once eligible, the host
+requests shutdown by keeping DTR high for 500 ms, then lowering it. A disconnect
+exits after the bridge has armed; transient startup disconnects are ignored.
+UART traffic remains byte-transparent.
 
 The source copy did not include repository metadata or a license file, so this
 directory does not claim additional license terms. No built `.fap` or `.elf`

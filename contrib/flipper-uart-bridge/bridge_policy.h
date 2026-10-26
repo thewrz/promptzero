@@ -25,6 +25,7 @@ typedef enum {
 typedef struct {
     bool connected;
     bool dtr_high;
+    bool dtr_close_ready;
     bool high_since_valid;
     bool armed;
     uint32_t high_since;
