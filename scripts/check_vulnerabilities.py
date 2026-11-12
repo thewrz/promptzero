@@ -4,6 +4,7 @@
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 SCANNER = ["go", "run", "golang.org/x/vuln/cmd/govulncheck@v1.9.0", "-json", "./..."]
 MITIGATION_TEST = [
@@ -13,6 +14,8 @@ MITIGATION_TEST = [
 ALLOWED_ID = "GO-2026-6911"
 ALLOWED_MODULE = "github.com/mark3labs/mcp-go"
 ALLOWED_VERSION = "v1.3.0"
+REPOSITORY_MODULE = "github.com/xunholy/promptzero"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_TESTS = {
     "TestFederationClientsDoNotFollowRedirects",
     "TestFederationClientsDoNotFollowRedirects/http",
@@ -150,7 +153,21 @@ def is_allowed_finding(finding):
     if finding["osv"] != ALLOWED_ID or finding.get("fixed_version", ""):
         return False
     affected_module = finding["trace"][0]
-    return affected_module["module"] == ALLOWED_MODULE and affected_module["version"] == ALLOWED_VERSION
+    if affected_module["module"] != ALLOWED_MODULE or affected_module["version"] != ALLOWED_VERSION:
+        return False
+    if affected_module.get("function") != "NewStreamableHTTP":
+        return True
+    if affected_module.get("receiver"):
+        return False
+    constructor_caller = next(
+        (frame for frame in finding["trace"][1:] if frame["module"] == REPOSITORY_MODULE),
+        None,
+    )
+    return bool(
+        constructor_caller
+        and constructor_caller.get("package") == f"{REPOSITORY_MODULE}/internal/mcpfed"
+        and constructor_caller.get("function") == "buildClient"
+    )
 
 
 def passing_mitigation_events(raw):
@@ -174,7 +191,13 @@ def passing_mitigation_events(raw):
 
 
 def run(command):
-    return subprocess.run(command, text=True, capture_output=True, check=False)
+    return subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
+
+
+def echo_process_output(process):
+    for output in (process.stdout, process.stderr):
+        if output:
+            print(output, end="" if output.endswith("\n") else "\n", file=sys.stderr)
 
 
 def main():
@@ -190,21 +213,29 @@ def main():
     try:
         findings = validate_report(raw_report)
     except ReportError as error:
-        return fail(str(error))
+        detail = f"{error}; scanner stderr: {scan.stderr.strip()}" if scan.stderr else str(error)
+        return fail(detail)
     called_findings = [finding for finding, called in findings if called]
     if not called_findings:
         print("vulnerability gate: no called vulnerability findings")
         return 0
-    if any(not is_allowed_finding(finding) for finding in called_findings):
-        ids = ", ".join(sorted({finding["osv"] for finding in called_findings}))
-        return fail(f"unapproved called vulnerability finding(s): {ids}")
+    disallowed_findings = [finding for finding in called_findings if not is_allowed_finding(finding)]
+    if disallowed_findings:
+        details = sorted({
+            f"{finding['osv']} {finding['trace'][0]['module']}@{finding['trace'][0].get('version', '')} "
+            f"fixed_version={finding.get('fixed_version') or 'none'}"
+            for finding in disallowed_findings
+        })
+        return fail(f"unapproved called vulnerability finding(s): {'; '.join(details)}")
     try:
         tests = run(MITIGATION_TEST)
     except OSError as error:
         return fail(f"could not start redirect mitigation tests: {error}")
     if tests.returncode != 0:
-        return fail(f"redirect mitigation tests exited {tests.returncode}: {tests.stderr.strip()}")
+        echo_process_output(tests)
+        return fail(f"redirect mitigation tests exited {tests.returncode}")
     if not passing_mitigation_events(tests.stdout):
+        echo_process_output(tests)
         return fail("redirect mitigation parent, http, and sse tests did not all pass")
     print("vulnerability gate: documented redirect mitigation verified")
     return 0
