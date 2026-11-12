@@ -40,3 +40,6 @@ Thumbs.db
 
 # Flipper protobuf fetch cache (task proto:fetch, if used)
 .proto-cache/
+
+# Per-checkout tool caches (scripts/lint.sh keeps golangci-lint's cache here)
+/.cache/

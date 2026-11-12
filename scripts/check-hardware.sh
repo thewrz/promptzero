@@ -11,8 +11,10 @@ for dependency in python3 node cc shellcheck; do
 done
 
 shellcheck contrib/linux/promptzero-mcp-wrapper
+shellcheck scripts/lint.sh
 python3 -m unittest discover -s contrib/linux -p 'test_*.py'
 python3 -m unittest discover -s scripts -p 'test_check_vulnerabilities.py'
+python3 -m unittest discover -s scripts -p 'test_lint.py'
 python3 -m unittest discover -s scripts -p 'test_mcp_smoke.py'
 node --test contrib/flipper-uart-bridge/tests/marauder_scan.test.cjs
 
