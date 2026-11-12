@@ -12,6 +12,7 @@ done
 
 shellcheck contrib/linux/promptzero-mcp-wrapper
 python3 -m unittest discover -s contrib/linux -p 'test_*.py'
+python3 -m unittest discover -s scripts -p 'test_check_vulnerabilities.py'
 python3 -m unittest discover -s scripts -p 'test_mcp_smoke.py'
 node --test contrib/flipper-uart-bridge/tests/marauder_scan.test.cjs
 
