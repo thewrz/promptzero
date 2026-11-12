@@ -59,21 +59,14 @@ tasks:
       - go mod tidy
 
   lint:
-    # golangci-lint refuses to analyse with a Go newer than the one it was
-    # built with ("file requires newer Go version"), which happens as soon as
-    # the system Go moves ahead of the module's. Pin the lint run to the
-    # toolchain go.mod names, so it does not depend on the system Go.
+    # scripts/lint.sh pins the run to the toolchain go.mod names and keeps
+    # the linter's cache inside this checkout; the script says why.
     desc: Run golangci-lint across the module.
-    vars:
-      MODULE_TOOLCHAIN:
-        sh: sed -n 's/^toolchain //p' go.mod
-    env:
-      GOTOOLCHAIN: "{{.MODULE_TOOLCHAIN}}"
     preconditions:
       - sh: which golangci-lint
         msg: "run task dev:setup first"
     cmds:
-      - golangci-lint run ./...
+      - sh scripts/lint.sh
 
   claude-usage:
     desc: Refresh the Claude usage/cost badge JSON from local CLI transcripts.
