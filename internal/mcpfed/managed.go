@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -223,6 +224,15 @@ func (m *managedClient) remoteTools() []mcp.Tool {
 	return out
 }
 
+// noRedirectClient returns an HTTP client that never follows redirects. The
+// configured headers (API keys, tokens) are attached to every request the
+// transport makes, so following a server-chosen Location would hand them to
+// another host (GO-2026-6911). A server behind a redirect must be configured
+// with its final URL.
+func noRedirectClient() *http.Client {
+	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
 // buildClient constructs the appropriate mcp-go client per transport.
 //
 // nolint:cyclop // routes by transport, naturally three branches.
@@ -242,14 +252,14 @@ func buildClient(cfg ClientConfig) (*mcpclient.Client, error) {
 		)
 
 	case "http":
-		var opts []mcptransport.StreamableHTTPCOption
+		opts := []mcptransport.StreamableHTTPCOption{mcptransport.WithHTTPBasicClient(noRedirectClient())}
 		if len(cfg.Headers) > 0 {
 			opts = append(opts, mcptransport.WithHTTPHeaders(cfg.Headers))
 		}
 		return mcpclient.NewStreamableHttpClient(cfg.URL, opts...)
 
 	case "sse":
-		var opts []mcptransport.ClientOption
+		opts := []mcptransport.ClientOption{mcptransport.WithHTTPClient(noRedirectClient())}
 		if len(cfg.Headers) > 0 {
 			opts = append(opts, mcptransport.WithHeaders(cfg.Headers))
 		}

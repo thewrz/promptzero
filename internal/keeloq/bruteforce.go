@@ -92,17 +92,7 @@ func BruteForce(ctx context.Context, cfg BruteForceConfig) (uint64, bool, error)
 		return 0, false, nil
 	}
 
-	workers := cfg.Workers
-	if workers <= 0 {
-		workers = runtime.NumCPU()
-	}
-	// Hard upper cap so a caller passing workers=10000 (operator
-	// typo, malicious LLM tool call) can't spawn that many
-	// goroutines for no throughput gain — the BruteForce work is
-	// CPU-bound and saturates well below NumCPU on any modern host.
-	if workers > maxBruteForceWorkers {
-		workers = maxBruteForceWorkers
-	}
+	workers := effectiveBruteForceWorkers(cfg.Workers)
 
 	total := cfg.KeyspaceMax - cfg.KeyspaceMin
 	span := total / uint64(workers)
@@ -180,4 +170,18 @@ func BruteForce(ctx context.Context, cfg BruteForceConfig) (uint64, bool, error)
 		return foundKey.Load(), true, nil
 	}
 	return 0, false, nil
+}
+
+// effectiveBruteForceWorkers applies the default and hard upper cap. A CPU-
+// bound search saturates below NumCPU, so an operator typo or tool request
+// should not spawn unbounded goroutines.
+func effectiveBruteForceWorkers(requested int) int {
+	workers := requested
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+	if workers > maxBruteForceWorkers {
+		workers = maxBruteForceWorkers
+	}
+	return workers
 }

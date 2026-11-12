@@ -13,7 +13,7 @@ Use the Go toolchain declared in `go.mod`. The development tools are installed
 with `task dev:setup`; include `$(go env GOPATH)/bin` in `PATH`.
 
 ```sh
-export GOTOOLCHAIN=go1.26.10
+export GOTOOLCHAIN=go1.26.11
 task ci
 task hardware:test
 install -m 755 bin/promptzero "$HOME/.local/bin/promptzero-fork"
