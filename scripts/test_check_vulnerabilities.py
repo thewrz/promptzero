@@ -121,6 +121,18 @@ class GateBoundaryTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["cwd"], GATE.REPO_ROOT)
         self.assertIn("GO-2026-6911", output)
 
+    def test_redirect_tests_run_with_cgo_whatever_the_caller_set(self):
+        # They run under the race detector, which needs cgo, and the Taskfile turns cgo off for every task.
+        with mock.patch.dict(GATE.os.environ, {"CGO_ENABLED": "0", "PZ_GATE_MARKER": "kept"}):
+            result, calls, _, _ = self.invoke(report(finding()), test_output=passing_test_events())
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("-race", calls[1][0])
+        self.assertEqual(calls[1][1]["env"]["CGO_ENABLED"], "1")
+        self.assertEqual(calls[1][1]["env"]["PZ_GATE_MARKER"], "kept")
+        # The scanner keeps the caller's environment as it is.
+        self.assertIsNone(calls[0][1].get("env"))
+
     def test_constructor_call_from_different_repository_site_fails(self):
         item = finding()
         item["trace"][2]["package"] = "github.com/xunholy/promptzero/cmd/hwtest"
