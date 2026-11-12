@@ -465,9 +465,9 @@ func TestRecoverFastTimeoutRange_FindsInRange(t *testing.T) {
 // hardcoded-full-range bug: the exhaustive fallback was searching the full
 // 2^48 regardless of the requested bound, so range_bits >= 32 was silently
 // ignored. With a key whose hi32 != 0 and a 16-bit bound (hiHi=1), the bounded
-// fallback must exhaust ~2^16 candidates and return promptly — NOT grind the
-// full keyspace until the context deadline. Before the fix this hit the
-// deadline; after it, it returns in well under a second.
+// fallback must exhaust ~2^16 candidates and return the range-exhaustion error
+// — NOT grind the full keyspace until the context deadline. The context is a
+// watchdog; elapsed time is not part of the contract.
 func TestRecoverFastTimeoutRange_RespectsBound(t *testing.T) {
 	const key = uint64(0x1234_5678_9ABC) // hi32 = 0x12345678 — far outside a 16-bit bound
 	const uid = uint32(0xcafebabe)
@@ -478,16 +478,14 @@ func TestRecoverFastTimeoutRange_RespectsBound(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	start := time.Now()
 	_, err := RecoverFastTimeoutRange(ctx, uid, cap0.NT, cap0.NR, ar0, cap1.NT, cap1.NR, ar1, 0, 1)
-	elapsed := time.Since(start)
 
-	// The bound is honoured iff we returned without burning the whole deadline.
 	if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-		t.Fatalf("bounded 16-bit search hit the context deadline after %s — the range bound was ignored "+
-			"(fallback still searched the full 2^48)", elapsed)
+		t.Fatalf("bounded 16-bit search hit the context deadline — the range bound was ignored " +
+			"(fallback still searched the full 2^48)")
 	}
-	if elapsed > 10*time.Second {
-		t.Errorf("bounded 16-bit search took %s — too slow, range bound likely not honoured", elapsed)
+	const wantErr = "mfkey32: no matching key found in the specified key range"
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("bounded 16-bit search error = %v, want %q", err, wantErr)
 	}
 }

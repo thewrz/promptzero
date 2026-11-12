@@ -187,7 +187,8 @@ func TestTextDecoders_MalformedInputNeverPanics(t *testing.T) {
 						t.Errorf("%s panicked on %s=%q: %v", s.Name, param, in, r)
 					}
 				}()
-				_, _ = s.Handler(context.Background(), nil, map[string]any{param: in})
+				h := textDecoderHandler{spec: s, param: param}
+				_, _ = s.Handler(context.Background(), nil, textDecoderFuzzArgs(h, in))
 			}()
 		}
 	}
@@ -492,6 +493,63 @@ func textDecoderHandlers() []textDecoderHandler {
 	return out
 }
 
+// textDecoderFuzzArgs supplies bounded work factors and fixed salts to
+// password-hash handlers while preserving the fuzzer-controlled required text.
+func textDecoderFuzzArgs(h textDecoderHandler, data string) map[string]any {
+	args := map[string]any{h.param: data}
+	switch h.spec.Name {
+	case "argon2":
+		args["memory"], args["time"], args["parallelism"], args["salt"] = 8, 1, 1, "fuzz-salt"
+	case "bcrypt":
+		args["cost"] = 4
+	case "dcc2":
+		args["username"], args["iterations"] = "fuzz", float64(1)
+	case "md5crypt":
+		args["salt"] = "fuzzsalt"
+	case "pbkdf2_password":
+		args["iterations"], args["salt"] = 1, "fuzz-salt"
+	case "phpass_password":
+		args["rounds_log"], args["salt"] = 7, "12345678"
+	case "sha_crypt":
+		args["rounds"], args["salt"] = 1000, "fuzz-salt"
+	}
+	return args
+}
+
+func TestTextDecoderFuzzArgsBudgetExpensiveHandlers(t *testing.T) {
+	want := map[string]map[string]any{
+		"argon2":          {"memory": 8, "time": 1, "parallelism": 1, "salt": "fuzz-salt"},
+		"bcrypt":          {"cost": 4},
+		"dcc2":            {"username": "fuzz", "iterations": float64(1)},
+		"md5crypt":        {"salt": "fuzzsalt"},
+		"pbkdf2_password": {"iterations": 1, "salt": "fuzz-salt"},
+		"phpass_password": {"rounds_log": 7, "salt": "12345678"},
+		"sha_crypt":       {"rounds": 1000, "salt": "fuzz-salt"},
+	}
+	seen := make(map[string]bool, len(want))
+	for _, h := range textDecoderHandlers() {
+		budget, ok := want[h.spec.Name]
+		if !ok {
+			continue
+		}
+		args := textDecoderFuzzArgs(h, "fuzz-input")
+		if args[h.param] != "fuzz-input" {
+			t.Errorf("%s: fuzz input not assigned to %q: %#v", h.spec.Name, h.param, args)
+		}
+		for key, value := range budget {
+			if args[key] != value {
+				t.Errorf("%s: %s = %#v, want budget %v", h.spec.Name, key, args[key], value)
+			}
+		}
+		seen[h.spec.Name] = true
+	}
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("%s is not covered by the text decoder fuzz budget", name)
+		}
+	}
+}
+
 // FuzzTextDecoders drives every pure offline text decoder (NMEA
 // sentences, JWT tokens, SIP/HTTP messages, syslog lines,
 // Wiegand/DCF77 bit strings, X.509 PEM, etc.) with fuzzer-generated
@@ -539,7 +597,7 @@ func FuzzTextDecoders(f *testing.F) {
 							h.spec.Name, h.param, data, r)
 					}
 				}()
-				_, _ = h.spec.Handler(context.Background(), nil, map[string]any{h.param: data})
+				_, _ = h.spec.Handler(context.Background(), nil, textDecoderFuzzArgs(h, data))
 			}()
 		}
 	})

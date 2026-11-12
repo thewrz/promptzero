@@ -34,8 +34,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 # Actions pinned to Node 24-native major versions; no env override needed.
 
@@ -61,13 +60,14 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.10'
-          cache: true
+          go-version: '1.26.11'
+          cache: false
 
       - name: Build
         env:
@@ -119,12 +119,16 @@ jobs:
           if-no-files-found: error
 
   release:
+    permissions:
+      contents: write
+      id-token: write
     name: release
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Download all build artifacts
@@ -216,6 +220,7 @@ jobs:
       - name: Resolve release notes
         id: extract_notes
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           version="${TAG_NAME#v}"
@@ -227,6 +232,7 @@ jobs:
           # instead of the annotated tag body (this silently shipped commit
           # subjects as release notes). Force-fetch the real annotated tag
           # object so %(contents:subject/body) resolve to the tag annotation.
+          gh auth setup-git --hostname github.com
           git fetch --force origin "refs/tags/${TAG_NAME}:refs/tags/${TAG_NAME}" 2>/dev/null || true
 
           awk -v ver="$version" '
@@ -288,6 +294,8 @@ jobs:
       attestations: write # actions/attest-build-provenance
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       # Match the binary ldflags: 7-char commit + UTC build date.
       - name: Build metadata

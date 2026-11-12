@@ -108,20 +108,19 @@ func TestBruteForceZeroWorkers(t *testing.T) {
 	}
 }
 
-// TestBruteForceWorkersClampedAboveCap pins the upper-bound clamp.
-// Without the cap a caller asking for Workers=10000 would spawn
-// 10000 goroutines for a CPU-bound loop that saturates well
-// below NumCPU. Run a tiny brute force with an absurd Workers
-// value and confirm the call still returns correctly within a
-// reasonable wall-clock budget — the goroutine spawn count is
-// silently bounded by maxBruteForceWorkers (64).
+// TestBruteForceWorkersClampedAboveCap verifies that a request above the cap
+// is bounded and the search still returns the matching key, without a
+// machine-speed assumption.
 func TestBruteForceWorkersClampedAboveCap(t *testing.T) {
+	if got := effectiveBruteForceWorkers(10000); got != maxBruteForceWorkers {
+		t.Fatalf("effective worker count = %d for a request above cap, want %d", got, maxBruteForceWorkers)
+	}
+
 	const pt = uint32(0xABCD)
 	const key = uint64(0x0000FF)
 	ct := Encrypt(pt, key)
 
-	start := time.Now()
-	_, ok, err := BruteForce(context.Background(), BruteForceConfig{
+	found, ok, err := BruteForce(context.Background(), BruteForceConfig{
 		KnownPlaintext:  pt,
 		KnownCiphertext: ct,
 		KeyspaceMin:     0,
@@ -134,12 +133,8 @@ func TestBruteForceWorkersClampedAboveCap(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected to find key 0x%016X", key)
 	}
-	// 64 workers on a 1<<20 keyspace returns in well under a
-	// second on any reasonable host. Generous budget; the test
-	// fails only if the clamp didn't fire and the runtime drowned
-	// in goroutine spawn cost.
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Errorf("BruteForce took %v with workers=10000; clamp likely not effective", elapsed)
+	if found != key {
+		t.Fatalf("BruteForce found wrong key: got 0x%016X, want 0x%016X", found, key)
 	}
 }
 
