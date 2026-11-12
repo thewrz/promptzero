@@ -2,6 +2,7 @@
 """Run the pinned govulncheck scan and enforce the repository advisory policy."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -190,8 +191,17 @@ def passing_mitigation_events(raw):
     return seen == REQUIRED_TESTS
 
 
-def run(command):
-    return subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
+def run(command, env=None):
+    return subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False, env=env)
+
+
+def race_environment():
+    """The caller's environment with cgo on.
+
+    The redirect tests run under the race detector, which needs cgo, and the
+    Taskfile turns cgo off for every task.
+    """
+    return {**os.environ, "CGO_ENABLED": "1"}
 
 
 def echo_process_output(process):
@@ -228,7 +238,7 @@ def main():
         })
         return fail(f"unapproved called vulnerability finding(s): {'; '.join(details)}")
     try:
-        tests = run(MITIGATION_TEST)
+        tests = run(MITIGATION_TEST, env=race_environment())
     except OSError as error:
         return fail(f"could not start redirect mitigation tests: {error}")
     if tests.returncode != 0:
