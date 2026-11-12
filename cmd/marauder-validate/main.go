@@ -320,8 +320,8 @@ func buildCases() []tcase {
 			return "", nil
 		}, allowEmpty: true},
 		{category: "sniff", name: "SniffPMKID(passive)", skip: "SKIPPED — streaming verb wedges the CLI prompt on the current firmware; validated structurally via unit tests"},
-		{category: "ble", name: "SniffBT(airtag|flipper|flock|meta)", skip: "SKIPPED — streaming BT sniffers wedge subsequent non-streaming commands on this firmware build"},
-		{category: "ble", name: "SniffSkimmer", skip: "SKIPPED — same streaming-wedge profile as SniffBT"},
+		{category: "ble", name: "SniffBT(all|airtag|flipper|flock|meta)", skip: "SKIPPED — requires BLE-capable hardware and a known advertiser; startup and cleanup alone do not validate reception"},
+		{category: "ble", name: "SniffSkimmer", skip: "SKIPPED — streaming skimmer detection is not covered by the bounded BLE advertisement reader"},
 		{category: "gps", name: "NMEA", skip: "SKIPPED — streaming verb; wrapper correctness covered by build-time verification"},
 		{category: "select", name: "SelectAP/SelectStation/SelectSSID", skip: "SKIPPED — pure string builders; live chain wedges subsequent commands when no APs are scanned"},
 		{category: "mac", name: "CloneAPMAC", skip: "SKIPPED — requires a scanned AP list and wedges on empty list"},
