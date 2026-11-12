@@ -64,8 +64,13 @@ class LintScriptTest(unittest.TestCase):
 
     def test_lints_the_whole_module_from_the_checkout_root(self):
         _, seen = self.lint(cwd=REPO_ROOT / "scripts")
+        arguments = seen["args"].split()
         self.assertEqual(pathlib.Path(seen["cwd"]), REPO_ROOT)
-        self.assertEqual(seen["args"], "run ./...")
+        self.assertEqual((arguments[0], arguments[-1]), ("run", "./..."))
+
+    def test_does_not_wait_for_or_refuse_runs_in_other_checkouts(self):
+        _, seen = self.lint()
+        self.assertIn("--allow-parallel-runners", seen["args"].split())
 
     def test_linter_exit_status_is_returned(self):
         status, _ = self.lint(caller={"LINT_STATUS": "3"})
