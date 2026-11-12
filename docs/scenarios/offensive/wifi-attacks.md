@@ -81,8 +81,12 @@ Valid modes: `apple`, `google`, `samsung`, `windows`, `flipper`,
   devices are hunting for).
 - `wifi_sniff_deauth` — detect active deauth attacks in the area.
 - `wifi_sniff_pwnagotchi` — pwnagotchi handshake ads.
-- `wifi_sniff_bt` — Bluetooth targets (airtag | flipper | flock |
-  meta).
+- `wifi_sniff_bt` — BLE advertisements (all | airtag | flipper | flock |
+  meta), collected for 1–60 seconds (default 30). Active scanning may send
+  scan requests; this does not decode established Bluetooth connections.
+- `wifi_read_cli` — exact diagnostic commands: help, info, stopscan, sniffbt,
+  or sniffbt -t with one of the four device filters. The same duration bounds
+  apply; scans stop automatically.
 - `wifi_sniff_skimmer` — Bluetooth credit-card skimmers.
 - `wifi_sniff_raw` — all 802.11 packets on the current channel.
 

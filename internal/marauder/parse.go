@@ -14,7 +14,7 @@ import (
 // the agent's JSON tool_result payloads so the LLM sees a consistent
 // shape across features.
 //
-// AccessPoint covers the output of scanap / list -a. All fields but
+// AccessPoint covers the output of scanall / list -a / info -a. All fields but
 // Index are best-effort — firmware variations across Marauder
 // versions move SSIDs into / out of quotes, replace "CH" with
 // "Channel", etc. Missing fields stay zero/empty rather than
@@ -25,7 +25,9 @@ type AccessPoint struct {
 	BSSID    string `json:"bssid,omitempty"`
 	RSSI     int    `json:"rssi,omitempty"`    // dBm
 	Channel  int    `json:"channel,omitempty"` // 1-14 (2.4 GHz) or 5GHz equivalents
-	RawLine  string `json:"raw,omitempty"`     // original line for audit / fallback
+	Security string `json:"security,omitempty"`
+	Hidden   bool   `json:"hidden"`
+	RawLine  string `json:"raw,omitempty"` // original line for audit / fallback
 	Selected bool   `json:"selected,omitempty"`
 }
 
@@ -46,9 +48,11 @@ type Station struct {
 // prompt-injection quarantine layer upstream (see internal/agent) —
 // the sanitised text is what's bounced into the tool_result.
 type ScanResult struct {
-	APs      []AccessPoint `json:"aps,omitempty"`
-	Count    int           `json:"count"`
-	RawLines []string      `json:"raw_lines,omitempty"`
+	APs       []AccessPoint `json:"aps,omitempty"`
+	Count     int           `json:"count"`
+	RawLines  []string      `json:"raw_lines,omitempty"`
+	Truncated bool          `json:"truncated,omitempty"`
+	Limit     int           `json:"limit,omitempty"`
 }
 
 // StationResult mirrors ScanResult for the station list.
@@ -69,16 +73,19 @@ type StationResult struct {
 // with forgiving regex patterns so adding a new firmware variant
 // doesn't regress older captures.
 var (
-	apIndexRE = regexp.MustCompile(`^\s*(\d+)\s*[|:]`)
+	apIndexRE        = regexp.MustCompile(`^\s*(\d+)\s*[|:]`)
+	bracketAPIndexRE = regexp.MustCompile(`^\s*\[(\d+)\]`)
+	bracketAPLineRE  = regexp.MustCompile(`(?i)^\s*\[(\d+)\]\s*\[CH(?:ANNEL)?\s*:\s*(\d+)\]\s*(.*?)\s+(-?\d+)(?:\s*dBm)?\s*$`)
 	// Anchored on a field boundary (start-of-line, comma, pipe, or
 	// whitespace) so "BSSID:" doesn't get mis-matched as the SSID
 	// field (BSSID contains SSID as a suffix — a naive regex would
 	// otherwise capture the MAC address as the SSID).
-	ssidFieldRE = regexp.MustCompile(`(?:^|[,|\t ])(?:SSID|ssid)\s*[:=]\s*(.+?)(?:,|\s{2,}|\s*BSSID|\s*RSSI|\s*CH|\s*Channel|\s*\[|$)`)
-	bssidRE     = regexp.MustCompile(`([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})`)
-	rssiRE      = regexp.MustCompile(`-?\d+\s*(?:dBm|DBM)|(?:RSSI|rssi)\s*[:=]\s*(-?\d+)`)
-	channelRE   = regexp.MustCompile(`(?:CH|Channel|ch|channel)\s*[:=]?\s*(\d+)`)
-	macOnlyRE   = regexp.MustCompile(`^([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})`)
+	ssidFieldRE     = regexp.MustCompile(`(?:^|[,|\t ])(?:SSID|ssid)\s*[:=]\s*(.+?)(?:,|\s{2,}|\s*BSSID|\s*RSSI|\s*CH|\s*Channel|\s*\[|$)`)
+	bssidRE         = regexp.MustCompile(`([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})`)
+	rssiRE          = regexp.MustCompile(`-?\d+\s*(?:dBm|DBM)|(?:RSSI|rssi)\s*[:=]\s*(-?\d+)`)
+	channelRE       = regexp.MustCompile(`(?:CH|Channel|ch|channel)\s*[:=]?\s*(\d+)`)
+	macOnlyRE       = regexp.MustCompile(`^([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})`)
+	stationAPLineRE = regexp.MustCompile(`(?i)^\s*(?:STA|STATION|CLIENT)\s*:`)
 )
 
 // ParseAPList parses a Marauder AP-list response (from scanap,
@@ -116,8 +123,34 @@ func ParseAPList(raw string) ScanResult {
 // BSSID — that signals "definitely not an AP row, skip it".
 func parseAPLine(line string) (AccessPoint, bool) {
 	ap := AccessPoint{RawLine: line}
+	if stationAPLineRE.MatchString(line) {
+		return AccessPoint{}, false
+	}
+	if matches := bracketAPLineRE.FindStringSubmatch(line); matches != nil {
+		index, indexErr := strconv.Atoi(matches[1])
+		channel, channelErr := strconv.Atoi(matches[2])
+		rssi, rssiErr := strconv.Atoi(matches[4])
+		if indexErr != nil || channelErr != nil || rssiErr != nil {
+			return AccessPoint{}, false
+		}
+		ssid := strings.TrimSpace(matches[3])
+		ap.Index = index
+		ap.SSID = ssid
+		ap.Channel = channel
+		ap.RSSI = rssi
+		if mac := macOnlyRE.FindStringSubmatch(ssid); mac != nil && strings.EqualFold(mac[1], ssid) {
+			ap.BSSID = strings.ToLower(mac[1])
+		}
+		return ap, ssid != ""
+	}
 
-	if m := apIndexRE.FindStringSubmatch(line); m != nil {
+	if m := bracketAPIndexRE.FindStringSubmatch(line); m != nil {
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			return AccessPoint{}, false
+		}
+		ap.Index = n
+	} else if m := apIndexRE.FindStringSubmatch(line); m != nil {
 		if n, err := strconv.Atoi(m[1]); err == nil {
 			ap.Index = n
 		}
@@ -227,40 +260,11 @@ func parseStationLine(line string) (Station, bool) {
 	return st, true
 }
 
-// ScanAPParsed runs scanap and returns the result parsed into a
+// ScanAPParsed runs a bounded scanall and returns the result parsed into a
 // ScanResult. On parse failure the raw string is still carried in
 // RawLines so the caller can fall back to text display.
 func (m *Marauder) ScanAPParsed(timeout time.Duration) (ScanResult, error) {
 	return m.ScanAPParsedCtx(context.Background(), timeout)
-}
-
-// ScanAPParsedCtx is the context-aware variant of ScanAPParsed.
-// A turn-level cancel (e.g. operator Ctrl+C in the REPL) propagates
-// to the underlying Marauder read loop within ~100 ms, so the call
-// returns promptly rather than blocking until the timeout fires.
-// Mirrors the [Flipper.ExecLongCtx] convention so handlers can
-// thread their dispatch ctx all the way through to the wire.
-func (m *Marauder) ScanAPParsedCtx(ctx context.Context, timeout time.Duration) (ScanResult, error) {
-	raw, err := m.ExecCtx(ctx, "scanap", timeout)
-	if err != nil {
-		return ScanResult{}, err
-	}
-	return ParseAPList(raw), nil
-}
-
-// ScanAPParsedStream is the line-streaming variant of ScanAPParsed.
-// onLine is invoked for every scanap line as the firmware emits it
-// (typically one per detected AP); returning stop=true ends the
-// scan early. The accumulated raw output is parsed and returned
-// the same way ScanAPParsed would. Errors propagate; stream-end
-// (timeout / ctx cancel / onLine stop) is treated as success and
-// the parser runs against whatever was accumulated.
-func (m *Marauder) ScanAPParsedStream(ctx context.Context, timeout time.Duration, onLine func(line string) (stop bool)) (ScanResult, error) {
-	raw, err := m.StreamLines(ctx, "scanap", timeout, onLine)
-	if err != nil {
-		return ScanResult{}, err
-	}
-	return ParseAPList(raw), nil
 }
 
 // ListAPsParsed runs list -a and returns the parsed AP list.
@@ -300,7 +304,7 @@ type DeviceInfo struct {
 
 var (
 	reMarauderVersion = regexp.MustCompile(`(?i)(?:ESP32\s+)?Marauder\s+v?([\d.]+)`)
-	reESPIDFVersion   = regexp.MustCompile(`(?i)ESP-IDF\s+(?:Version:\s*)?v?([\S]+)`)
+	reESPIDFVersion   = regexp.MustCompile(`(?i)ESP-IDF\s*:?\s*(?:Version:\s*)?v?([\S]+)`)
 	reChannel         = regexp.MustCompile(`(?i)Channel:\s*(\d+)`)
 	reMAC             = regexp.MustCompile(`(?i)MAC:\s*([\da-fA-F:]{17})`)
 )
@@ -308,6 +312,9 @@ var (
 // ParseDeviceInfo extracts structured device information from the raw
 // output of the Marauder `info` command.
 func ParseDeviceInfo(raw string) DeviceInfo {
+	if d, ok := parseModernDeviceInfo(raw); ok {
+		return d
+	}
 	var d DeviceInfo
 	if m := reMarauderVersion.FindStringSubmatch(raw); len(m) > 1 {
 		d.Detected = true

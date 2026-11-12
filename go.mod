@@ -2,7 +2,7 @@ module github.com/xunholy/promptzero
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.11
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.82.0
@@ -82,3 +82,5 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 	tinygo.org/x/espradio v0.4.0 // indirect
 )
+
+replace tinygo.org/x/bluetooth => github.com/thewrz/bluetooth v0.16.1-0.20261026011133-625592a24264

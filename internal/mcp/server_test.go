@@ -238,6 +238,82 @@ func TestServer_CallTool_MissingRequiredArg(t *testing.T) {
 	}
 }
 
+func TestServer_CallTool_StorageWriteAllowsExplicitEmptyContent(t *testing.T) {
+	c, _ := newTestHarness(t, false, testmocks.WithFlipperHandler("storage", func(args []string) string {
+		if len(args) >= 1 && args[0] == "stat" {
+			return "File, size: 12"
+		}
+		return ""
+	}))
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	invalid := []struct {
+		name      string
+		tool      string
+		arguments map[string]any
+		missing   string
+	}{
+		{name: "omitted content", tool: "storage_write", arguments: map[string]any{"path": "/ext/apps_data/empty.txt"}, missing: "content"},
+		{name: "nil content", tool: "storage_write", arguments: map[string]any{"path": "/ext/apps_data/empty.txt", "content": nil}, missing: "content"},
+		{name: "empty path", tool: "storage_write", arguments: map[string]any{"path": "", "content": ""}, missing: "path"},
+		{name: "whitespace path", tool: "storage_write", arguments: map[string]any{"path": "  ", "content": ""}, missing: "path"},
+		{name: "other required string remains nonempty", tool: "storage_read", arguments: map[string]any{"path": "  "}, missing: "path"},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			var req mcplib.CallToolRequest
+			req.Params.Name = tc.tool
+			req.Params.Arguments = tc.arguments
+			res, err := c.CallTool(ctx, req)
+			if err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			if !res.IsError || !strings.Contains(firstText(t, res), tc.missing) {
+				t.Fatalf("expected required %q rejection, got IsError=%v result=%q", tc.missing, res.IsError, firstText(t, res))
+			}
+		})
+	}
+	nonStringContent := []struct {
+		name    string
+		content any
+	}{
+		{name: "number", content: 42},
+		{name: "boolean", content: false},
+		{name: "object", content: map[string]any{"value": "text"}},
+	}
+	for _, tc := range nonStringContent {
+		t.Run("non-string content "+tc.name, func(t *testing.T) {
+			var req mcplib.CallToolRequest
+			req.Params.Name = "storage_write"
+			req.Params.Arguments = map[string]any{"path": "/ext/apps_data/empty.txt", "content": tc.content}
+			res, err := c.CallTool(ctx, req)
+			if err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			if !res.IsError || !strings.Contains(firstText(t, res), "content must be a string") {
+				t.Fatalf("non-string content was not rejected: IsError=%v result=%q", res.IsError, firstText(t, res))
+			}
+		})
+	}
+
+	var req mcplib.CallToolRequest
+	req.Params.Name = "storage_write"
+	req.Params.Arguments = map[string]any{"path": "/ext/apps_data/empty.txt", "content": ""}
+	res, err := c.CallTool(ctx, req)
+	if err != nil {
+		t.Fatalf("CallTool empty content: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("explicit empty content failed before replacement handler: %q", firstText(t, res))
+	}
+	if got := firstText(t, res); !strings.Contains(got, "ok") {
+		t.Fatalf("empty-content storage_write result = %q, want handler success", got)
+	}
+}
+
 // TestServer_CallTool_HighRiskDefaultDenied verifies that a risk.High tool
 // (subghz_transmit) is refused by default when PROMPTZERO_MCP_ALLOW_HIGH is
 // not set. This is the primary consent-gate assertion for the High tier.

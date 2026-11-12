@@ -237,7 +237,7 @@ func (f *Flipper) Transport() transport.Transport { return f.transport }
 // into UART pass-through mode.
 func (f *Flipper) LaunchBridge(ctx context.Context, command string) (string, error) {
 	if !f.IsBLE() {
-		return f.ExecCtx(ctx, command)
+		return f.launchBridgeUSB(ctx, command)
 	}
 	return f.launchBridgeViaGPIORPC(ctx)
 }
@@ -1208,120 +1208,6 @@ func (f *Flipper) StreamCtx(ctx context.Context, command string, onLine func(lin
 	}
 }
 
-// WriteFile writes data to a file on the Flipper using the storage write_chunk
-// interactive protocol: send the command with the byte count, then send the raw
-// bytes immediately after. Preserved for backward compatibility; prefer
-// WriteFileCtx so cancellation and reconnect propagate a ctx.
-func (f *Flipper) WriteFile(path string, data []byte) error {
-	return f.WriteFileCtx(context.Background(), path, data)
-}
-
-// WriteFileCtx is the context-aware variant of WriteFile. It reconnects if
-// needed, uses a cancellable sleep between command and payload, and tags
-// any disconnect-class error via markDisconnectedIfRelevant so the next
-// op can recover.
-//
-// When the pipeline's FileWriteRetryAttempts > 1, WriteFileCtx retries
-// transient failures (timeout waiting for prompt, send errors) with
-// FileWriteRetryDelay between attempts. Each retry re-issues the full
-// write_chunk command so the firmware gets a clean write.
-//
-// Firmware append behaviour: some firmware builds — notably Momentum dev
-// branch as of mntm-dev 430a3d50 (2026-03-09) — do NOT truncate an existing
-// file when storage write_chunk is called; they append to the existing
-// content instead. Callers that need truncate semantics must issue
-// "storage remove <path>" before writing, or the re-written file will
-// contain concatenated data.
-func (f *Flipper) WriteFileCtx(ctx context.Context, path string, data []byte) error {
-	if f.bridgeMode.Load() {
-		return ErrFlipperSuspended
-	}
-	if f.rpcMode.Load() {
-		return f.rpcModeError("write_file " + path)
-	}
-
-	pl := f.pipeline()
-	attempts := pl.FileWriteRetryAttempts
-	if attempts <= 0 {
-		attempts = 1
-	}
-
-	var lastErr error
-	for attempt := 1; attempt <= attempts; attempt++ {
-		lastErr = f.writeFileOnce(ctx, path, data)
-		if lastErr == nil {
-			return nil
-		}
-		if !isTransientExecError(lastErr) || ctx.Err() != nil {
-			return lastErr
-		}
-		if attempt < attempts {
-			obs.Default().Warn("file_write_retry",
-				"path", path,
-				"attempt", attempt,
-				"max", attempts,
-				"err", lastErr)
-			delay := pl.FileWriteRetryDelay
-			if delay <= 0 {
-				delay = 500 * time.Millisecond
-			}
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	}
-	return lastErr
-}
-
-func (f *Flipper) writeFileOnce(ctx context.Context, path string, data []byte) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if err := f.reconnectIfNeededLocked(ctx); err != nil {
-		return err
-	}
-
-	f.drain()
-
-	cmd := fmt.Sprintf("storage write_chunk %s %d\r", sanitizeArg(path), len(data))
-	if err := f.sendRaw(cmd); err != nil {
-		f.markDisconnectedIfRelevant(err)
-		return fmt.Errorf("sending write_chunk command: %w", err)
-	}
-
-	select {
-	case <-time.After(100 * time.Millisecond):
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	f.drain()
-
-	written := 0
-	for written < len(data) {
-		n, err := f.transport.Write(data[written:])
-		if err != nil {
-			f.markDisconnectedIfRelevant(err)
-			return fmt.Errorf("writing file data at offset %d: %w", written, err)
-		}
-		written += n
-	}
-
-	writeTO := f.writeFileTimeout
-	if writeTO <= 0 {
-		writeTO = f.pipeline().WriteFile
-	}
-	if writeTO <= 0 {
-		writeTO = 10 * time.Second
-	}
-	readCtx, cancel := context.WithTimeout(ctx, writeTO)
-	defer cancel()
-	_, err := f.readUntilPromptCtx(readCtx)
-	f.markDisconnectedIfRelevant(err)
-	return err
-}
-
 func (f *Flipper) sendRaw(data string) error {
 	_, err := f.transport.Write([]byte(data))
 	return err
@@ -1350,6 +1236,14 @@ func (f *Flipper) readUntilPrompt(timeout time.Duration) (string, error) {
 // is returned alongside ErrResponseTruncated so the caller can still inspect
 // it.
 func (f *Flipper) readUntilPromptCtx(ctx context.Context) (string, error) {
+	return f.readUntilPromptWithEchoCtx(ctx, true)
+}
+
+func (f *Flipper) readUntilPromptWithoutEchoCtx(ctx context.Context) (string, error) {
+	return f.readUntilPromptWithEchoCtx(ctx, false)
+}
+
+func (f *Flipper) readUntilPromptWithEchoCtx(ctx context.Context, sawCommandEcho bool) (string, error) {
 	var accum []byte
 	buf := make([]byte, 512)
 
@@ -1369,7 +1263,7 @@ func (f *Flipper) readUntilPromptCtx(ctx context.Context) (string, error) {
 		}
 		accum = append(accum, buf[:n]...)
 		if idx := indexOfPrompt(accum); idx >= 0 {
-			return parseResponse(accum[:idx], true), nil
+			return parseResponse(accum[:idx], sawCommandEcho), nil
 		}
 		if len(accum) > f.accumCap() {
 			return parseResponse(accum, false), ErrResponseTruncated

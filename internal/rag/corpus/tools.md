@@ -2,7 +2,7 @@
 
 A curated reference of the **core** device, RF, NFC/RFID, and credential tools,
 grouped by subsystem — the most-used primitives, not the whole registry. The
-full set is much larger (600+ tools and growing); run `/tools` (or
+full set is much larger (700+ tools and growing); run `/tools` (or
 `tool_search <query>`) in the REPL for the complete live list with schemas and
 risk levels. Each entry below shows:
 
@@ -21,8 +21,9 @@ Canonical definitions: the tool registry lives in `internal/tools/` — each
 
 ## Device & session (info)
 
-### `system_info` · low
-No parameters. Returns firmware, hardware, radio, region, UID.
+### `device_info` · low
+No parameters. Returns firmware, hardware, radio, region, UID. (Also
+reachable by its legacy alias `system_info`.)
 
 **Prompt:** *"What's my Flipper's firmware version and hardware
 revision?"* — [transcript smoke-test](../transcripts/01-storage-list.log)
@@ -44,7 +45,7 @@ firmware, MAC"* → fires `bt_hci_info`. MAC is not exposed by stock
 firmware — expect the model to flag this and fall back to HCI version.
 ([transcript 35](../transcripts/35-bt-info.json))
 
-### `device_reboot` · high
+### `device_reboot` · critical
 No parameters. **Disconnects serial while the Flipper reboots** — plan
 for the `/reconnect` slash command in the REPL.
 
@@ -57,11 +58,11 @@ firmware**. Only call when you're about to reflash.
 = brick. Normally you stage an update with qFlipper, then point this
 at `/ext/update/<…>/update.fuf`.
 
-### `crypto_store_key` · critical
+### `crypto_store_key` · high
 `slot` (int), `key_type` (master|simple|encrypted), `key_size` (128|256),
 `hex` (required). Overwrites the target slot permanently.
 
-### `flipper_raw_cli` · high
+### `flipper_raw_cli` · critical
 `command` (string, required). Escape hatch to the Flipper CLI.
 
 **When to prompt for this:** *"Run the Flipper CLI command
@@ -87,7 +88,7 @@ CLI command can be issued, bypassing the structured tool layer entirely.
 No parameters. Name of the currently running app — useful to confirm a
 `loader_open` actually landed before you send `input_send` events.
 
-### `loader_signal` · medium
+### `loader_signal` · high
 `signal` (int, required). App-specific opcode delivered to the running
 FAP.
 
@@ -122,16 +123,16 @@ recursively"* ([transcript 03](../transcripts/03-storage-tree.json))
 fires `storage_md5` and returns the 32-char hex.
 ([transcript 34](../transcripts/34-storage-md5.json))
 
-### `storage_mkdir` · low
+### `storage_mkdir` · medium
 `path` (string, required).
 
-### `storage_copy` · low
+### `storage_copy` · medium
 `src`, `dst` (strings). Overwrites destination.
 
 ### `storage_rename` · medium
 `src`, `dst` (strings). Move/rename.
 
-### `storage_delete` · high
+### `storage_delete` · medium
 `path` (string, required). Irreversible.
 
 The agent will self-cleanup scratch files in the same turn when
@@ -173,13 +174,13 @@ decoded frames — use when you want to eyeball an unknown protocol.
 and dump the raw data (don't save to SD)"*
 ([transcript 24](../transcripts/24-subghz-rx-raw.json))
 
-### `subghz_decode` · low
+### `subghz_decode` · medium
 `file` (string, required). Parses a saved `.sub`.
 **Prompt:** *"Decode /ext/subghz/Tesla/Tesla_US_AM650.sub — show me the
 protocol, frequency and whatever key data you can extract"*
 ([transcript 30](../transcripts/30-subghz-decode.json))
 
-### `subghz_transmit` · **critical** (active RF)
+### `subghz_transmit` · **high** (active RF)
 `file` (string, required).
 **Prompt that works:** *"Transmit /ext/subghz/garage.sub"* — the agent
 will ask you to confirm before firing. Only run with authorisation for
@@ -189,11 +190,11 @@ the target device.
 `file`, `frequency`, `duration_seconds`. Replays variations. Huge
 RF footprint — effectively always illegal outside a lab.
 
-### `subghz_tx_key` · **critical**
+### `subghz_tx_key` · **high**
 Raw bytes on a frequency. `key_hex`, `frequency`, `te`, `repeat`. Used
 for protocol experimentation / replay; you supply the timing.
 
-### `subghz_chat` · **critical**
+### `subghz_chat` · **high**
 `frequency` (req), `duration_seconds`. Opens an interactive Sub-GHz
 text chat that transmits on every keystroke.
 
@@ -201,7 +202,7 @@ text chat that transmits on every keystroke.
 
 ## Infrared
 
-### `ir_receive` · low
+### `ir_receive` · medium
 `timeout_seconds` (default 30). Passive.
 **Prompt:** *"Try to learn an IR signal — I'll press a remote at the
 Flipper. Give it 8 seconds."*
@@ -228,12 +229,12 @@ per button.
 
 ## NFC / 13.56 MHz
 
-### `nfc_detect` · low
+### `nfc_detect` · medium
 `timeout_seconds` (default 30). Early-returns on detection.
 **Prompt:** *"Try to detect an NFC tag for 8 seconds"*
 ([transcript 09](../transcripts/09-nfc-detect.json))
 
-### `nfc_emulate` · **critical** (active emission)
+### `nfc_emulate` · **high** (active emission)
 `file` (string). The Flipper acts as the tag.
 
 ### `nfc_subcommand` · high
@@ -249,17 +250,17 @@ hatch into the NFC CLI subshell.
 ### `nfc_mfu_rdbl` · medium
 `page` (int). Reads 4 bytes from Ultralight/NTAG.
 
-### `nfc_mfu_wrbl` · **critical**
+### `nfc_mfu_wrbl` · **high**
 `page`, `hex` (4 bytes). Destructive; some pages are OTP.
 
-### `nfc_dump_protocol` · high
+### `nfc_dump_protocol` · medium
 `protocol` (`Mifare_Classic`, `Mifare_Ultralight`, …). Full dump.
 
 ---
 
 ## RFID (125 kHz LF)
 
-### `rfid_read` · low
+### `rfid_read` · medium
 `mode` (optional — leave empty for auto-detect), `timeout_seconds` (15).
 Hardware: fob flat against the **back** of the Flipper.
 
@@ -270,7 +271,7 @@ the back of the Flipper. Give it 8 seconds max."*
 ### `rfid_emulate` · high
 `protocol`, `data` (hex).
 
-### `rfid_write` · **critical**
+### `rfid_write` · **high**
 `protocol`, `data`. Writes to a T5577 blank (or similar).
 
 ### `rfid_raw_read` · medium
@@ -279,14 +280,14 @@ the back of the Flipper. Give it 8 seconds max."*
 ### `rfid_raw_analyze` · low
 `file`.
 
-### `rfid_raw_emulate` · **critical**
+### `rfid_raw_emulate` · **high**
 `file`, `duration_seconds`.
 
 ---
 
 ## iButton / 1-Wire
 
-### `ibutton_read` · low
+### `ibutton_read` · medium
 `timeout_seconds` (default 30).
 
 ### `onewire_search` · low
@@ -302,14 +303,14 @@ treats 1-wire as the more general tool).
 ### `ibutton_emulate` · high
 `protocol` (Dallas|Cyfral|Metakom), `hex_data`.
 
-### `ibutton_write` · **critical**
+### `ibutton_write` · **high**
 `hex_data`. Dallas only.
 
 ---
 
 ## GPIO / hardware
 
-### `gpio_set` · medium
+### `gpio_set` · high
 `pin` (PA7/PA6/PA4/PB3/PB2/PC3/PC1/PC0), `value` (0|1).
 
 ### `gpio_read` · low
@@ -325,7 +326,7 @@ GPIO header"*
 
 ## BadUSB
 
-### `badusb_run` · **critical**
+### `badusb_run` · **high**
 `file`. Types arbitrary keystrokes into the host computer.
 
 ### `badusb_validate` · low
@@ -346,13 +347,13 @@ deploys, then validates with `severity: critical`, rule `rm_rf_root`.
 
 ## Input / UI
 
-### `loader_open` · medium
+### `loader_open` · high
 `app_name` (NFC|SubGHz|Infrared|iButton|Bad USB|GPIO|…), `args` (opt).
 **Prompt:** *"Open the NFC app on my Flipper, tell me what app is
 running, then close it"* → chains `loader_open` → `loader_info` →
 `loader_close`. ([transcript 25](../transcripts/25-loader-flow.json))
 
-### `loader_close` · low
+### `loader_close` · medium
 No parameters.
 
 ### `input_send` · medium
@@ -440,23 +441,23 @@ Every `generate_*` tool takes a natural-language `description`, plus
 `deploy` (bool, default **true** — pass `false` to preview only) and
 `path` (custom SD destination).
 
-### `generate_badusb` · high (critical with `deploy=true`)
+### `generate_badusb` · medium (critical with `deploy=true`)
 `description` (req), `target_os` (windows|macos|linux), `deploy`, `path`.
 **Prompt:** *"Generate a BadUSB payload for Windows that pops a Hello
 World notepad window — generate only, do NOT deploy"*
 ([transcript 13](../transcripts/13-gen-badusb.json))
 
-### `generate_evil_portal` · high
+### `generate_evil_portal` · medium
 `description` (req), `deploy`, `path` (default
 `/ext/apps_data/evil_portal/index.html`).
 **Prompt:** *"Generate an evil-portal HTML page that looks like a
 corporate guest WiFi login — don't deploy"*
 ([transcript 23](../transcripts/23-gen-evil-portal.json))
 
-### `generate_subghz` · high
+### `generate_subghz` · medium
 `description` (req), `deploy`, `path`.
 
-### `generate_ir` · low
+### `generate_ir` · medium
 `description` (req), `deploy`, `path`.
 **Prompt:** *"Generate an IR remote file for a generic Samsung TV —
 generate only, do NOT deploy"*
@@ -469,7 +470,7 @@ generate only, do NOT deploy"*
 `type` (evil_portal|badusb|subghz|ir|nfc), `description`, `target_os`
 (badusb only), `path`. End-to-end — generates, writes to SD, executes.
 
-### `run_payload` · **critical**
+### `run_payload` · **high**
 `path` (on SD), `command` (IR button name if applicable). Dispatches to
 the right tool based on extension.
 
@@ -488,7 +489,7 @@ when the user's goal is a *task* rather than a single command.
 **Prompt:** *"Run the black-box hardware recon workflow on whatever's
 hooked up to my GPIO header right now"* → single
 `workflow_hw_recon_blackbox_device` call, aggregates i2c_scan /
-onewire_search / GPIO sweep / bt_hci_info / system_info.
+onewire_search / GPIO sweep / bt_hci_info / device_info.
 ([transcript 15](../transcripts/15-workflow-hwrecon.json))
 
 ### `workflow_garage_door_triage` · medium (RX only)
@@ -515,7 +516,7 @@ and do NOT dump yet."*
 ### `workflow_badusb_target_profile` · high (critical with `auto_run=true`)
 `description` (req), `target_os` (req), `output_path`, `auto_run`.
 
-### `workflow_wifi_target_to_hashcat` · **critical** (Marauder only)
+### `workflow_wifi_target_to_hashcat` · **high** (Marauder only)
 `scan_seconds`, `capture_seconds`, `bssid`, `output_path`. Returns a
 friendly error if the Marauder isn't connected.
 
@@ -541,7 +542,24 @@ and the agent won't mention them.
 
 **Passive capture:** `wifi_sniff_pmkid`, `wifi_sniff_beacon`,
 `wifi_sniff_deauth`, `wifi_sniff_probe`, `wifi_sniff_pwnagotchi`,
-`wifi_sniff_raw`, `wifi_sniff_bt`, `wifi_sniff_skimmer`.
+`wifi_sniff_raw`, `wifi_sniff_skimmer`.
+
+`wifi_sniff_bt` accepts `target_type: "all"` for unfiltered BLE advertisement
+discovery, or `airtag`, `flipper`, `flock`, `meta`. `duration_seconds` is an
+integer from 1 to 60 (default 30). The scan stops on expiry or cancellation.
+This discovers advertisements; it does not capture established Bluetooth links.
+
+The BLE scan stops any previous scan mode, continues past the firmware startup
+prompt, and waits for `stopscan` acknowledgement during cleanup. Queued replies
+are drained first; if input cannot settle within a bounded interval, the stop
+is still sent and the call reports uncertain cleanup. Marauder uses active BLE
+scanning, which can send scan requests.
+
+`wifi_read_cli` provides scoped Marauder diagnostics at Medium risk. It accepts
+exactly `help`, `info`, `stopscan`, `sniffbt`, or `sniffbt -t` followed by one of
+`airtag`, `flipper`, `flock`, `meta`. It uses the same duration bounds. Other
+commands, control characters, and command chaining are rejected before I/O;
+unrestricted CLI permissions are not required or changed.
 
 **Network recon (requires joining a network):** `wifi_join`,
 `wifi_ping_scan`, `wifi_arp_scan`, `wifi_port_scan`.

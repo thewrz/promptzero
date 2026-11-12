@@ -89,15 +89,31 @@ func TestIClassHandlerDumpFile(t *testing.T) {
 
 	spec := iclassSpec(t)
 
-	// 300s outer + 270s handler: race-instrumented loclass on shared CI
-	// runners genuinely needs more than the previous 120s budget; under
-	// -short the test is skipped entirely above.
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
-	defer cancel()
+	// Reserve the last 30s of the test deadline for cleanup and failure
+	// reporting. Keep a bounded fallback for direct test invocations without
+	// a runner deadline.
+	const cleanupMargin = 30 * time.Second
+	ctx := t.Context()
+	handlerTimeout := 270 * time.Second
+	if deadline, ok := t.Deadline(); ok {
+		outerDeadline := deadline.Add(-cleanupMargin)
+		handlerTimeout = time.Until(outerDeadline)
+		if handlerTimeout <= 0 {
+			t.Fatalf("not enough test time remains for iClass recovery: %s", handlerTimeout)
+		}
+		boundedCtx, cancel := context.WithDeadline(ctx, outerDeadline)
+		defer cancel()
+		ctx = boundedCtx
+	} else {
+		const fallbackOuterTimeout = 300 * time.Second
+		boundedCtx, cancel := context.WithTimeout(ctx, fallbackOuterTimeout)
+		defer cancel()
+		ctx = boundedCtx
+	}
 
 	result, err := spec.Handler(ctx, nil, map[string]any{
 		"captures":   dumpPath,
-		"timeout_ms": float64(270000),
+		"timeout_ms": float64(handlerTimeout.Milliseconds()),
 	})
 	if err != nil {
 		t.Fatalf("handler error: %v", err)

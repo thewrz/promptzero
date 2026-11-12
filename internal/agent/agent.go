@@ -1779,7 +1779,15 @@ func (a *Agent) dispatchStreaming(ctx context.Context, spec toolsreg.Spec, p map
 	}()
 	defer cancel()
 
-	return spec.StreamHandler(streamCtx, a.deps(), p, sink)
+	out, err := spec.StreamHandler(streamCtx, a.deps(), p, sink)
+	// Callback-driven abort cancels streamCtx deliberately. A context-
+	// aware producer may return that cancellation as its result; treat
+	// it as a successful partial result unless the caller's context was
+	// also canceled. Parent cancellation remains an actual dispatch error.
+	if errors.Is(err, context.Canceled) && sink.IsAborted() && ctx.Err() == nil {
+		return out, nil
+	}
+	return out, err
 }
 
 // workflowConfirmHook routes a workflow's internal sub-tool

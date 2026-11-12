@@ -109,6 +109,9 @@ func run() error {
 	if err := validateMarauderFlags(f); err != nil {
 		return err
 	}
+	if err := validateMarauderConfig(cfg); err != nil {
+		return err
+	}
 
 	// Install the slog handler before any subsystem so they share a
 	// configured default. PROMPTZERO_LOG_LEVEL is an operator-only
@@ -134,6 +137,9 @@ func run() error {
 		flip = nil
 		flipClose = func() {}
 	}
+	if f.mcpMode {
+		flipClose = registerShutdownCleanup(sh, flipClose)
+	}
 	defer flipClose()
 
 	rec := setupMetrics(cfg)
@@ -150,7 +156,7 @@ func run() error {
 	}
 
 	if f.mcpMode {
-		return runMCPMode(ctx, cfg, flip, f.wifiEnabled)
+		return runMCPMode(ctx, sh, cfg, flip, f.wifiEnabled)
 	}
 
 	if err := cfg.RequireAPIKey(); err != nil {

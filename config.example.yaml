@@ -52,6 +52,9 @@ marauder:
   # mode is active, all flipper_* tools are disabled (the CLI is gone by
   # firmware design).
   bridge: false
+  # Custom FAP only: assert DTR for 500ms on bridge connection and lower it
+  # on close so the FAP exits cleanly. Requires bridge: true.
+  # bridge_exit_dtr: true
   # Override per firmware: Momentum / Unleashed / RogueMaster all ship the
   # app as "USB-UART Bridge" today; older OFW builds may expect a different
   # name. Quotes are part of the CLI verb — keep them.

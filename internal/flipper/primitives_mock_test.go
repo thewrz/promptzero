@@ -378,30 +378,40 @@ func TestNFCMFURead_StockSubshell(t *testing.T) {
 	}
 }
 
-// TestJSRunForkGatedOnStock verifies JSRun refuses to even issue the CLI
-// command on firmware forks without a JS runtime.
-func TestJSRunForkGatedOnStock(t *testing.T) {
+// TestJSRunUsesStockEngineCapability verifies stock firmware with a detected
+// JS engine executes the same saved-script CLI command as supported forks.
+func TestJSRunUsesStockEngineCapability(t *testing.T) {
 	m := mock.Spawn(t,
 		mock.WithHandler("device_info", func(args []string) string { return stockDeviceInfo }),
+		mock.WithHandler("js", func(args []string) string { return "script done" }),
 	)
 	flip := connectAndDetect(t, m)
 
-	before := m.Count()
-	_, err := flip.JSRun("/ext/apps/Scripts/hello.js", 5*time.Second)
-	if err == nil {
-		t.Fatal("expected JSRun to error on stock fork")
+	out, err := flip.JSRun("/ext/apps/Scripts/hello.js", 5*time.Second)
+	if err != nil {
+		t.Fatalf("JSRun: %v", err)
 	}
-	if !strings.Contains(err.Error(), "JS runtime not available") {
-		t.Errorf("unexpected error: %v", err)
+	if !strings.Contains(out, "script done") {
+		t.Errorf("expected script output, got %q", out)
 	}
-	// The fork gate must short-circuit — no `js` command should have been sent.
+	if got := flip.Capabilities().JSEngineKind; got != "mjs" {
+		t.Fatalf("JSEngineKind = %q, want mjs", got)
+	}
+	found := false
 	for _, l := range m.Lines() {
-		if strings.HasPrefix(strings.TrimSpace(l), "js ") {
-			t.Errorf("JSRun dispatched %q despite fork gate", l)
+		if strings.TrimSpace(l) == "js /ext/apps/Scripts/hello.js" {
+			found = true
 		}
 	}
-	if m.Count() < before {
-		t.Fatalf("impossible: count moved backward from %d to %d", before, m.Count())
+	if !found {
+		t.Fatalf("JSRun did not dispatch stock JS command: %v", m.Lines())
+	}
+}
+
+func TestJSRunRejectsMissingEngineCapability(t *testing.T) {
+	flip := flipper.NewForTest(flipper.Capabilities{})
+	if _, err := flip.JSRun("/ext/apps/Scripts/hello.js", time.Second); err == nil || !strings.Contains(err.Error(), "JS runtime not available") {
+		t.Fatalf("JSRun error = %v, want capability error", err)
 	}
 }
 

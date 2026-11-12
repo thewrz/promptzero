@@ -1,0 +1,236 @@
+#!/bin/sh
+# Prepare the Flipper serial port before starting PromptZero's MCP stdio server.
+
+set -u
+
+fail() {
+	printf 'promptzero-mcp-wrapper: %s\n' "$*" >&2
+	exit 1
+}
+
+find_matching_alias() {
+	alias_dir=$1
+	ALIAS_COUNT=0
+	ALIAS_MATCH=
+	for candidate in "$alias_dir"/*; do
+		[ -e "$candidate" ] || continue
+		candidate_id=$(stat -Lc '%t:%T' -- "$candidate" 2>/dev/null) || continue
+		if [ "$candidate_id" = "$DEVICE_NODE_ID" ]; then
+			ALIAS_COUNT=$((ALIAS_COUNT + 1))
+			ALIAS_MATCH=$candidate
+		fi
+	done
+}
+
+sysfs_device_identity() {
+	device_path=$1
+	tty_name=${device_path##*/}
+	sysfs_link=/sys/class/tty/$tty_name/device
+	if [ ! -e "$sysfs_link" ]; then
+		printf 'node:%s\n' "$device_path"
+		return 0
+	fi
+	sysfs_path=$(readlink -f -- "$sysfs_link" 2>/dev/null) || return 1
+	case $sysfs_path in
+		*/usb[0-9]*/*)
+			usb_path=${sysfs_path%:*}
+			[ -d "$usb_path" ] || return 1
+			printf 'sysfs:%s\n' "$usb_path"
+			;;
+		*)
+			printf 'node:%s\n' "$device_path"
+			;;
+	esac
+}
+
+for dependency in id mkdir chmod readlink stat cksum flock sleep stty; do
+	if ! command -v "$dependency" >/dev/null 2>&1; then
+		fail "required dependency '$dependency' was not found in PATH"
+	fi
+done
+
+if [ -z "${FLIPPER_PORT:-}" ]; then
+	fail "FLIPPER_PORT must name the Flipper serial device"
+fi
+
+WAIT_ATTEMPTS=${PROMPTZERO_READY_ATTEMPTS:-25}
+case $WAIT_ATTEMPTS in
+	''|*[!0-9]*|0) fail "PROMPTZERO_READY_ATTEMPTS must be a positive integer" ;;
+esac
+
+attempt=0
+while [ ! -e "$FLIPPER_PORT" ] && [ "$attempt" -lt "$WAIT_ATTEMPTS" ]; do
+	sleep 0.2
+	attempt=$((attempt + 1))
+done
+if [ ! -e "$FLIPPER_PORT" ]; then
+	fail "Flipper device '$FLIPPER_PORT' was not present after bounded readiness wait"
+fi
+
+CANONICAL_PORT=$(readlink -f -- "$FLIPPER_PORT" 2>/dev/null) ||
+	fail "could not resolve FLIPPER_PORT '$FLIPPER_PORT'"
+if [ ! -c "$CANONICAL_PORT" ]; then
+	fail "Flipper path '$FLIPPER_PORT' does not resolve to a character device"
+fi
+if [ ! -r "$CANONICAL_PORT" ] || [ ! -w "$CANONICAL_PORT" ]; then
+	fail "Flipper device '$CANONICAL_PORT' must be readable and writable by this user"
+fi
+
+DEVICE_NODE_ID=$(stat -Lc '%t:%T' -- "$CANONICAL_PORT" 2>/dev/null) ||
+	fail "could not identify Flipper device '$CANONICAL_PORT'"
+CHILD_PORT=$FLIPPER_PORT
+case $FLIPPER_PORT in
+	/*) stable_input=$FLIPPER_PORT ;;
+	*) stable_input=$PWD/$FLIPPER_PORT ;;
+esac
+if [ -L "$FLIPPER_PORT" ]; then
+	DEVICE_IDENTITY=alias:$stable_input
+else
+	find_matching_alias /dev/serial/by-id
+	if [ "$ALIAS_COUNT" -gt 1 ]; then
+		fail "multiple /dev/serial/by-id aliases resolve to '$CANONICAL_PORT'; set FLIPPER_PORT to one explicit alias"
+	fi
+	if [ "$ALIAS_COUNT" -eq 1 ]; then
+		CHILD_PORT=$ALIAS_MATCH
+		DEVICE_IDENTITY=alias:$ALIAS_MATCH
+	else
+		find_matching_alias /dev/serial/by-path
+		if [ "$ALIAS_COUNT" -gt 1 ]; then
+			fail "multiple /dev/serial/by-path aliases resolve to '$CANONICAL_PORT'; set FLIPPER_PORT to one explicit alias"
+		fi
+		if [ "$ALIAS_COUNT" -eq 1 ]; then
+			CHILD_PORT=$ALIAS_MATCH
+			DEVICE_IDENTITY=alias:$ALIAS_MATCH
+		else
+			DEVICE_IDENTITY=$(sysfs_device_identity "$CANONICAL_PORT") ||
+				fail "could not derive a stable Flipper identity; set FLIPPER_PORT to one explicit /dev/serial/by-id alias"
+		fi
+	fi
+fi
+
+validate_port_override() {
+	port_value=$1
+	[ -n "$port_value" ] || fail "--port requires a device path"
+	provided_canonical=$(readlink -f -- "$port_value" 2>/dev/null) ||
+		fail "--port '$port_value' must match FLIPPER_PORT '$FLIPPER_PORT'"
+	[ "$provided_canonical" = "$CANONICAL_PORT" ] ||
+		fail "--port '$port_value' must match FLIPPER_PORT '$FLIPPER_PORT'"
+}
+
+expect_port_value=0
+for argument do
+	if [ "$expect_port_value" -eq 1 ]; then
+		validate_port_override "$argument"
+		expect_port_value=0
+		continue
+	fi
+	case $argument in
+		--)
+			fail "positional arguments are not supported by this serial-device wrapper"
+			;;
+		--port)
+			expect_port_value=1
+			;;
+		--port=*)
+			validate_port_override "${argument#--port=}"
+			;;
+		--transport|--transport=*)
+			fail "--transport cannot be used with this serial-device wrapper"
+			;;
+	esac
+done
+if [ "$expect_port_value" -eq 1 ]; then
+	fail "--port requires a device path"
+fi
+
+if [ "${PROMPTZERO_BIN+x}" = x ]; then
+	[ -n "$PROMPTZERO_BIN" ] || fail "PROMPTZERO_BIN cannot be empty"
+else
+	[ -n "${HOME:-}" ] || fail "HOME is required when PROMPTZERO_BIN is not set"
+	if [ -f "$HOME/.local/bin/promptzero-fork" ] && [ -x "$HOME/.local/bin/promptzero-fork" ]; then
+		PROMPTZERO_BIN=$HOME/.local/bin/promptzero-fork
+	else
+		PROMPTZERO_BIN=$HOME/.local/bin/promptzero
+	fi
+fi
+if [ -z "$PROMPTZERO_BIN" ] || [ ! -x "$PROMPTZERO_BIN" ]; then
+	fail "PromptZero executable '$PROMPTZERO_BIN' is missing or not executable; set PROMPTZERO_BIN"
+fi
+
+identity_checksum=$(printf '%s' "$DEVICE_IDENTITY" | cksum) ||
+	fail "could not checksum Flipper identity"
+IDENTITY_CRC=${identity_checksum%% *}
+identity_rest=${identity_checksum#* }
+IDENTITY_BYTES=${identity_rest%% *}
+USER_ID=$(id -u) || fail "could not determine current user id"
+RUNTIME_BASE=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}
+LOCK_DIR=$RUNTIME_BASE/promptzero-mcp-$USER_ID
+if [ -L "$LOCK_DIR" ]; then
+	fail "lock directory '$LOCK_DIR' must not be a symlink"
+fi
+umask 077
+if ! mkdir -p -- "$LOCK_DIR" 2>/dev/null; then
+	fail "could not create lock directory '$LOCK_DIR'"
+fi
+if ! chmod 700 -- "$LOCK_DIR" 2>/dev/null; then
+	fail "could not secure lock directory '$LOCK_DIR'"
+fi
+LOCK_DIR_OWNER=$(stat -c '%u' -- "$LOCK_DIR" 2>/dev/null) ||
+	fail "could not verify lock directory '$LOCK_DIR'"
+[ "$LOCK_DIR_OWNER" = "$USER_ID" ] || fail "lock directory '$LOCK_DIR' is owned by another user"
+
+acquire_lock() {
+	lock_key=$1
+	lock_fd=$2
+	lock_label=$3
+	lock_file=$LOCK_DIR/$lock_key.lock
+	owner_file=$lock_file.owner
+	if [ -L "$lock_file" ] || [ -L "$owner_file" ]; then
+		fail "lock files for '$FLIPPER_PORT' must not be symlinks"
+	fi
+	: >> "$lock_file" 2>/dev/null || fail "could not open $lock_label lock for '$FLIPPER_PORT'"
+	if [ "$lock_fd" -eq 9 ]; then
+		exec 9>>"$lock_file"
+		if ! flock -n 9; then
+			locked=1
+		fi
+	else
+		exec 8>>"$lock_file"
+		if ! flock -n 8; then
+			locked=1
+		fi
+	fi
+	if [ "${locked:-0}" -eq 1 ]; then
+		owner_pid=
+		if [ -r "$owner_file" ]; then
+			IFS= read -r owner_pid < "$owner_file" || owner_pid=
+		fi
+		if [ -n "$owner_pid" ] && kill -0 "$owner_pid" 2>/dev/null; then
+			fail "Flipper device '$FLIPPER_PORT' is already in use by PromptZero PID $owner_pid ($lock_label lock); stop that session before starting another"
+		fi
+		fail "Flipper device '$FLIPPER_PORT' is already in use by another PromptZero launcher ($lock_label lock)"
+	fi
+	locked=0
+	printf '%s\n' "$$" > "$owner_file" || fail "could not record device lock owner"
+}
+
+acquire_lock "identity-$IDENTITY_CRC-$IDENTITY_BYTES" 9 stable-identity
+node_checksum=$(printf '%s' "$DEVICE_NODE_ID" | cksum) ||
+	fail "could not checksum current Flipper node"
+NODE_CRC=${node_checksum%% *}
+node_rest=${node_checksum#* }
+NODE_BYTES=${node_rest%% *}
+acquire_lock "node-$NODE_CRC-$NODE_BYTES" 8 current-node
+
+if command -v fuser >/dev/null 2>&1; then
+	device_owners=$(fuser "$CANONICAL_PORT" 2>/dev/null) || device_owners=
+	if [ -n "$device_owners" ]; then
+		fail "Flipper device '$CANONICAL_PORT' is already open by PID(s) $device_owners; close the owning process and retry"
+	fi
+fi
+
+if ! stty -F "$CANONICAL_PORT" raw -echo -echoe -echok; then
+	fail "could not set Flipper device '$CANONICAL_PORT' to raw mode; check permissions and whether another process owns it"
+fi
+
+exec "$PROMPTZERO_BIN" "$@" --port "$CHILD_PORT"

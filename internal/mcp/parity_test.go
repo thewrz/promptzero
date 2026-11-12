@@ -118,6 +118,32 @@ func TestOptsFromSchema_PreservesEnumArrayRequired(t *testing.T) {
 	}
 }
 
+func TestOptsFromSchema_PreservesExplicitEmptyStringMinimum(t *testing.T) {
+	schema := []byte(`{"type":"object","properties":{"content":{"type":"string","minLength":0}}}`)
+	tool := mcp.NewTool("t", optsFromSchema(schema, []string{"content"})...)
+	raw, err := json.Marshal(tool)
+	if err != nil {
+		t.Fatalf("marshal tool: %v", err)
+	}
+	if !strings.Contains(string(raw), `"minLength":0`) {
+		t.Fatalf("MCP input schema lost explicit minLength:0: %s", raw)
+	}
+}
+
+func TestOptsFromSchema_PreservesNumericBoundsAndDefault(t *testing.T) {
+	schema := []byte(`{"type":"object","properties":{"duration":{"type":"integer","minimum":1,"maximum":60,"default":30},"offset":{"type":"number","minimum":0,"default":0}}}`)
+	tool := mcp.NewTool("t", optsFromSchema(schema, nil)...)
+	raw, err := json.Marshal(tool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"minimum":1`, `"maximum":60`, `"default":30`, `"minimum":0`, `"default":0`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("MCP input schema lost %s: %s", want, raw)
+		}
+	}
+}
+
 // TestOptsFromSchema_NonStringEnumKeepsProperty ensures a non-string enum does
 // not error the whole property out (the enum is skipped, the property survives).
 func TestOptsFromSchema_NonStringEnumKeepsProperty(t *testing.T) {

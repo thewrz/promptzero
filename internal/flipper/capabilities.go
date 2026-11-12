@@ -51,8 +51,8 @@ type Capabilities struct {
 	SubGHzRxRawHasFilePath bool   // `subghz rx_raw` accepts a file-path arg (false on all modern forks — streams to stdout)
 
 	// ===== CLI surface (new — architect additions §C.1) =====
-	// JSEngineKind is the CLI verb prefix for the JS engine ("mjs" on all
-	// four active forks including archived Xtreme; firmware-matrix.md §4.1
+	// JSEngineKind names the reported JS engine ("mjs" on stock OFW and all
+	// four supported forks including archived Xtreme; firmware-matrix.md §4.1
 	// found no divergence despite the runbook's earlier claim).
 	JSEngineKind           string // "mjs" universally; "" if JS is absent
 	HasBLESpam             bool   // BLE Spam FAP present (Momentum/Xtreme in-tree; RM optimistic default)
@@ -197,7 +197,7 @@ func majorMinor(v string) string {
 //	Q3 — NFCFlaggedArgs stock default changed to true (was false).
 //	     Modern OFW (API ≥ 80) ships the flagged NFC CLI; only pre-consolidation
 //	     OFW (API < 80) used positional args.
-//	Q4 — JSEngineKind is "mjs" on all four active forks; no fork diverged.
+//	Q4 — JSEngineKind is "mjs" on stock OFW and all four supported forks.
 func detectCapabilities(deviceInfo string) Capabilities {
 	c := Capabilities{}
 

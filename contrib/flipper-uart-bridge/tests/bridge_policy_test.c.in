@@ -1,0 +1,244 @@
+#include "../bridge_policy.h"
+
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+static void test_tx_preserves_bytes_across_cdc_packet_boundaries(void) {
+    static const size_t lengths[] = {0, 1, 63, 64, 65, 512};
+    static const uint8_t markers[] = {0x00, 0x11, 0x13, '\r', '\n', 0x55, 0x55};
+
+    for(size_t case_index = 0; case_index < sizeof(lengths) / sizeof(lengths[0]); case_index++) {
+        uint8_t source[512];
+        uint8_t received[512] = {0};
+        size_t length = lengths[case_index];
+        for(size_t i = 0; i < length; i++)
+            source[i] = markers[i % sizeof(markers)];
+
+        BridgeTxCursor cursor = {0};
+        while(cursor.offset < length) {
+            size_t packet_length = bridge_tx_next(&cursor, length, BRIDGE_CDC_PACKET_MAX);
+            assert(packet_length > 0);
+            assert(packet_length <= BRIDGE_CDC_PACKET_MAX);
+            assert(bridge_tx_next(&cursor, length, BRIDGE_CDC_PACKET_MAX) == 0);
+            memcpy(received + cursor.offset, source + cursor.offset, packet_length);
+            assert(bridge_tx_complete(&cursor, true));
+        }
+
+        assert(cursor.offset == length);
+        assert(memcmp(received, source, length) == 0);
+        assert(bridge_tx_next(&cursor, length, BRIDGE_CDC_PACKET_MAX) == 0);
+    }
+}
+
+static void test_tx_timeout_does_not_advance_or_offer_another_packet(void) {
+    BridgeTxCursor cursor = {0};
+    assert(bridge_tx_next(&cursor, 65, BRIDGE_CDC_PACKET_MAX) == 64);
+    assert(!bridge_tx_complete(&cursor, false));
+    assert(cursor.offset == 0);
+    assert(cursor.failed);
+    assert(bridge_tx_next(&cursor, 65, BRIDGE_CDC_PACKET_MAX) == 0);
+}
+
+static void test_overflow_counts_only_unaccepted_bytes_and_saturates(void) {
+    assert(bridge_loss_record(0, 64, 64) == 0);
+    assert(bridge_loss_record(2, 64, 61) == 5);
+    assert(bridge_loss_record(UINT32_MAX - 1, 64, 60) == UINT32_MAX);
+    assert(bridge_loss_record(7, 4, 5) == 7);
+}
+
+static void test_uart_idle_event_drains_short_response_without_data_event(void) {
+    static const uint8_t reply[] = {0x69, 0x6e, 0x66, 0x6f, '\r', '\n', '>'};
+    uint8_t drained[sizeof(reply)] = {0};
+    size_t drain_length = bridge_uart_rx_drain_length(false, true, sizeof(reply));
+
+    assert(drain_length == sizeof(reply));
+    memcpy(drained, reply, drain_length);
+    assert(memcmp(drained, reply, sizeof(reply)) == 0);
+    assert(bridge_uart_rx_drain_length(true, false, sizeof(reply)) == sizeof(reply));
+    assert(bridge_uart_rx_drain_length(false, true, 0) == 0);
+    assert(bridge_uart_rx_drain_length(false, false, sizeof(reply)) == 0);
+}
+
+static void test_initial_high_snapshot_cannot_arm_but_next_high_can_close(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_set_connected(&lifecycle, true, 0);
+    bridge_lifecycle_set_dtr(&lifecycle, true, 0);
+    bridge_lifecycle_tick(&lifecycle, 900);
+    assert(!lifecycle.armed);
+    assert(!bridge_lifecycle_should_stop(&lifecycle));
+
+    bridge_lifecycle_set_dtr(&lifecycle, false, 1000);
+    assert(!lifecycle.armed);
+    assert(!bridge_lifecycle_should_stop(&lifecycle));
+    bridge_lifecycle_set_dtr(&lifecycle, true, 2000);
+    bridge_lifecycle_tick(&lifecycle, 2500);
+    assert(lifecycle.armed);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 2501);
+    assert(bridge_lifecycle_should_stop(&lifecycle));
+    assert(lifecycle.stop_reason == BridgeStopDtr);
+}
+
+static void test_initial_low_snapshot_enables_stable_dtr_close(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 50);
+    bridge_lifecycle_set_connected(&lifecycle, true, 75);
+    bridge_lifecycle_set_dtr(&lifecycle, true, 100);
+    bridge_lifecycle_tick(&lifecycle, 600);
+    assert(lifecycle.armed);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 601);
+    assert(bridge_lifecycle_should_stop(&lifecycle));
+    assert(lifecycle.stop_reason == BridgeStopDtr);
+}
+
+static void test_disconnect_then_reconnect_enables_dtr_close(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_set_connected(&lifecycle, true, 10);
+    bridge_lifecycle_set_dtr(&lifecycle, true, 10);
+    bridge_lifecycle_tick(&lifecycle, 900);
+    assert(!lifecycle.armed);
+    bridge_lifecycle_set_connected(&lifecycle, false, 901);
+    assert(!bridge_lifecycle_should_stop(&lifecycle));
+
+    bridge_lifecycle_set_connected(&lifecycle, true, 1000);
+    bridge_lifecycle_set_dtr(&lifecycle, true, 1000);
+    bridge_lifecycle_tick(&lifecycle, 1500);
+    assert(lifecycle.armed);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 1501);
+    assert(bridge_lifecycle_should_stop(&lifecycle));
+    assert(lifecycle.stop_reason == BridgeStopDtr);
+}
+
+static void test_dtr_ignores_startup_glitches_and_arms_after_stable_high(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_set_connected(&lifecycle, true, 100);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 100);
+    bridge_lifecycle_tick(&lifecycle, 1000);
+    assert(!lifecycle.armed);
+    assert(!bridge_lifecycle_should_stop(&lifecycle));
+
+    bridge_lifecycle_set_dtr(&lifecycle, true, 2000);
+    bridge_lifecycle_tick(&lifecycle, 2499);
+    assert(!lifecycle.armed);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 2499);
+    assert(!bridge_lifecycle_should_stop(&lifecycle));
+
+    bridge_lifecycle_set_dtr(&lifecycle, true, 3000);
+    bridge_lifecycle_tick(&lifecycle, 3500);
+    assert(lifecycle.armed);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 3501);
+    assert(bridge_lifecycle_should_stop(&lifecycle));
+    assert(lifecycle.stop_reason == BridgeStopDtr);
+}
+
+static void test_dtr_arm_dwell_uses_wrap_safe_tick_arithmetic(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_set_connected(&lifecycle, true, UINT32_MAX - 250u);
+    bridge_lifecycle_set_dtr(&lifecycle, false, UINT32_MAX - 250u);
+    bridge_lifecycle_set_dtr(&lifecycle, true, UINT32_MAX - 250u);
+    bridge_lifecycle_tick(&lifecycle, 248u);
+    assert(!lifecycle.armed);
+    bridge_lifecycle_tick(&lifecycle, 249u);
+    assert(lifecycle.armed);
+}
+
+static void test_dtr_fall_arms_at_dwell_before_processing_edge(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_set_connected(&lifecycle, true, 3000);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 3000);
+    bridge_lifecycle_set_dtr(&lifecycle, true, 3000);
+    bridge_lifecycle_tick(&lifecycle, 3499);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 3500);
+    assert(bridge_lifecycle_should_stop(&lifecycle));
+    assert(lifecycle.stop_reason == BridgeStopDtr);
+}
+
+static void test_dtr_fall_after_dwell_arms_without_another_tick_across_wrap(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_set_connected(&lifecycle, true, UINT32_MAX - 250u);
+    bridge_lifecycle_set_dtr(&lifecycle, false, UINT32_MAX - 250u);
+    bridge_lifecycle_set_dtr(&lifecycle, true, UINT32_MAX - 250u);
+    bridge_lifecycle_tick(&lifecycle, 248u);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 700u);
+    assert(bridge_lifecycle_should_stop(&lifecycle));
+    assert(lifecycle.stop_reason == BridgeStopDtr);
+}
+
+static void test_disconnect_arms_at_dwell_before_processing_state(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_set_connected(&lifecycle, true, 5000);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 5000);
+    bridge_lifecycle_set_dtr(&lifecycle, true, 5000);
+    bridge_lifecycle_tick(&lifecycle, 5499);
+    bridge_lifecycle_set_connected(&lifecycle, false, 5500);
+    assert(bridge_lifecycle_should_stop(&lifecycle));
+    assert(lifecycle.stop_reason == BridgeStopDisconnect);
+}
+
+static void test_disconnect_after_dwell_arms_without_another_tick_across_wrap(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_set_connected(&lifecycle, true, UINT32_MAX - 250u);
+    bridge_lifecycle_set_dtr(&lifecycle, false, UINT32_MAX - 250u);
+    bridge_lifecycle_set_dtr(&lifecycle, true, UINT32_MAX - 250u);
+    bridge_lifecycle_tick(&lifecycle, 248u);
+    bridge_lifecycle_set_connected(&lifecycle, false, 800u);
+    assert(bridge_lifecycle_should_stop(&lifecycle));
+    assert(lifecycle.stop_reason == BridgeStopDisconnect);
+}
+
+static void test_disconnect_only_stops_after_armed_session(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_set_connected(&lifecycle, false, 0);
+    assert(!bridge_lifecycle_should_stop(&lifecycle));
+    bridge_lifecycle_set_connected(&lifecycle, true, 10);
+    bridge_lifecycle_set_connected(&lifecycle, false, 20);
+    assert(!bridge_lifecycle_should_stop(&lifecycle));
+
+    bridge_lifecycle_set_connected(&lifecycle, true, 30);
+    bridge_lifecycle_set_dtr(&lifecycle, false, 30);
+    bridge_lifecycle_set_dtr(&lifecycle, true, 30);
+    bridge_lifecycle_tick(&lifecycle, 530);
+    assert(lifecycle.armed);
+    bridge_lifecycle_set_connected(&lifecycle, false, 531);
+    assert(bridge_lifecycle_should_stop(&lifecycle));
+    assert(lifecycle.stop_reason == BridgeStopDisconnect);
+}
+
+static void test_shutdown_reason_is_single_owner_and_idempotent(void) {
+    BridgeLifecycle lifecycle;
+    bridge_lifecycle_init(&lifecycle);
+    bridge_lifecycle_request_stop(&lifecycle, BridgeStopBack);
+    bridge_lifecycle_request_stop(&lifecycle, BridgeStopDisconnect);
+    assert(bridge_lifecycle_should_stop(&lifecycle));
+    assert(lifecycle.stop_reason == BridgeStopBack);
+}
+
+int main(void) {
+    test_tx_preserves_bytes_across_cdc_packet_boundaries();
+    test_tx_timeout_does_not_advance_or_offer_another_packet();
+    test_overflow_counts_only_unaccepted_bytes_and_saturates();
+    test_uart_idle_event_drains_short_response_without_data_event();
+    test_initial_high_snapshot_cannot_arm_but_next_high_can_close();
+    test_initial_low_snapshot_enables_stable_dtr_close();
+    test_disconnect_then_reconnect_enables_dtr_close();
+    test_dtr_ignores_startup_glitches_and_arms_after_stable_high();
+    test_dtr_arm_dwell_uses_wrap_safe_tick_arithmetic();
+    test_dtr_fall_arms_at_dwell_before_processing_edge();
+    test_dtr_fall_after_dwell_arms_without_another_tick_across_wrap();
+    test_disconnect_arms_at_dwell_before_processing_state();
+    test_disconnect_after_dwell_arms_without_another_tick_across_wrap();
+    test_disconnect_only_stops_after_armed_session();
+    test_shutdown_reason_is_single_owner_and_idempotent();
+    puts("bridge policy tests passed");
+    return 0;
+}

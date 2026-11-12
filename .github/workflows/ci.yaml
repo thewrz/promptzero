@@ -1,8 +1,8 @@
 name: CI
 
-# CI gates pull requests only. main is updated exclusively through squash
-# PRs, so the merged commit is the exact diff this workflow already
-# validated on the PR — a second post-merge run on push:main would just
+# CI gates pull requests only. main is updated through verified PRs,
+# preserving the source tree validated by this workflow. A second
+# post-merge run on push:main would just
 # re-do that work, so it is intentionally omitted. Per-platform build
 # coverage (darwin / windows / arm64) lives in release.yaml, which builds
 # every target on each tag; running a 5-way cross-compile on every PR
@@ -31,17 +31,28 @@ permissions:
 # targets Node.js 24, matching the GitHub-hosted runner default.
 
 jobs:
+  hardware-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Check launcher, MCP protocol, and bridge policy
+        run: sh scripts/check-hardware.sh
+
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.26.9']
+        go-version: ['1.26.11']
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
@@ -61,46 +72,46 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.11'
           cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.12.2
 
   vuln:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.11'
           cache: true
 
-      # Pinned (not @latest) so the tool version is reproducible and the
-      # module download is served from the setup-go cache instead of being
-      # re-resolved every run.
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
-
-      - name: govulncheck
-        run: govulncheck ./...
+      - name: Enforce vulnerability policy
+        run: python3 scripts/check_vulnerabilities.py
 
   dependency-review:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Dependency Review
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
         with:
           # Block PRs that introduce a Moderate-or-higher severity CVE
           # in any dependency. The project is AGPL-3.0-or-later;

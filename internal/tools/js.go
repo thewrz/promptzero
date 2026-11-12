@@ -11,7 +11,7 @@ import (
 func init() {
 	Register(Spec{
 		Name:        "js_run",
-		Description: "Execute a saved JavaScript file via the Flipper's JS runtime. Arbitrary code execution on the device. Fork-gated: only Xtreme, Momentum, and RogueMaster ship a JS runtime; returns a friendly-fork error on stock.",
+		Description: "Execute a saved JavaScript file via the Flipper's JS runtime. Arbitrary code execution on the device. Requires firmware that reports a JavaScript engine capability; supported stock OFW versions expose the same runtime.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Absolute .js file path, e.g. /ext/apps/Scripts/foo.js"},"duration_seconds":{"type":"number","description":"Max runtime in seconds (default 60)"}}}`),
 		Required:    []string{"path"},
 		Risk:        risk.Critical,

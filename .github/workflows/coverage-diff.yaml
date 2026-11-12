@@ -23,12 +23,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.11'
           cache: true
 
       - name: Generate coverage diff report
@@ -58,14 +60,13 @@ jobs:
             > "${OUTFILE}"
 
           LINES=$(wc -l < "${OUTFILE}")
-          echo "report_file=${OUTFILE}" >> "$GITHUB_OUTPUT"
-          echo "report_date=${DATE}"    >> "$GITHUB_OUTPUT"
-          echo "report_lines=${LINES}"  >> "$GITHUB_OUTPUT"
+          printf 'report_file=%s\nreport_date=%s\nreport_lines=%s\n' \
+            "$OUTFILE" "$DATE" "$LINES" >> "$GITHUB_OUTPUT"
 
       - name: Upload report artifact
         if: always()
         # v7 — Node 24 runtime; see release.yaml for the rationale.
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-diff-${{ steps.report.outputs.report_date || 'latest' }}
           path: docs/coverage/weekly-*.md
@@ -96,7 +97,7 @@ jobs:
         # whereas v9 is ESM-only and would force a rewrite of the
         # `const fs = require('fs')` line below. v8 already runs on
         # Node 24, which is what GitHub-hosted runners expect.
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           REPORT_FILE: ${{ steps.report.outputs.report_file }}
           REPORT_DATE: ${{ steps.report.outputs.report_date }}

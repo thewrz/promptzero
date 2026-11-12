@@ -114,6 +114,9 @@ marauder:
   # mode is active, all flipper_* tools are disabled (the CLI is gone by
   # firmware design).
   bridge: false
+  # Custom FAP only: assert DTR for 500ms on bridge connection and lower it
+  # on close so the FAP exits cleanly. Requires bridge: true.
+  # bridge_exit_dtr: true
   # Override per firmware: Momentum / Unleashed / RogueMaster all ship the
   # app as "USB-UART Bridge" today; older OFW builds may expect a different
   # name. Quotes are part of the CLI verb — keep them.
@@ -213,37 +216,39 @@ func resolveConfirmRisk(cfgValue, flagValue string, yolo bool) (risk.Level, bool
 // single struct so run() can pass the whole set to helpers without
 // restating the column of scalars every time.
 type runFlags struct {
-	cfgPath              string
-	portOverride         string
-	transportOverride    string
-	marauderPortOverride string
-	marauderBLEAddr      string // --marauder-ble
-	marauderBridge       bool   // --marauder-bridge
-	marauderBridgeCmd    string // --marauder-bridge-command
-	webMode              bool
-	webPort              int
-	voiceMode            bool
-	wifiEnabled          bool
-	mcpMode              bool
-	showVersion          bool
-	doInit               bool
-	resumeID             string
-	autoResume           bool
-	genProvider          string
-	ollamaURL            string
-	ollamaModel          string
-	connectTimeout       time.Duration
-	pipelineProfile      string
-	yoloMode             bool
-	confirmRisk          string
-	personaName          string
-	modeName             string  // --mode (deprecated, see runFlags.readOnly)
-	readOnly             bool    // --read-only
-	budgetUSD            float64 // --budget
-	webShare             bool    // --web-share — print copy-pasteable URL with the bearer token embedded
-	watchPaths           stringSlice
-	bleDiscover          bool          // --ble-discover
-	bleDiscoverDuration  time.Duration // --ble-discover-duration
+	cfgPath               string
+	portOverride          string
+	transportOverride     string
+	marauderPortOverride  string
+	marauderBLEAddr       string // --marauder-ble
+	marauderBridge        bool   // --marauder-bridge
+	marauderBridgeExitDTR bool   // --marauder-bridge-exit-dtr
+	marauderBridgeCmd     string // --marauder-bridge-command
+	noWiFi                bool   // --no-wifi
+	webMode               bool
+	webPort               int
+	voiceMode             bool
+	wifiEnabled           bool
+	mcpMode               bool
+	showVersion           bool
+	doInit                bool
+	resumeID              string
+	autoResume            bool
+	genProvider           string
+	ollamaURL             string
+	ollamaModel           string
+	connectTimeout        time.Duration
+	pipelineProfile       string
+	yoloMode              bool
+	confirmRisk           string
+	personaName           string
+	modeName              string  // --mode (deprecated, see runFlags.readOnly)
+	readOnly              bool    // --read-only
+	budgetUSD             float64 // --budget
+	webShare              bool    // --web-share — print copy-pasteable URL with the bearer token embedded
+	watchPaths            stringSlice
+	bleDiscover           bool          // --ble-discover
+	bleDiscoverDuration   time.Duration // --ble-discover-duration
 }
 
 // parseFlags binds all CLI flags and calls flag.Parse. Returns the
@@ -257,11 +262,14 @@ func parseFlags() *runFlags {
 	flag.IntVar(&f.webPort, "web-port", 0, "Web server port (overrides config)")
 	flag.BoolVar(&f.voiceMode, "voice", false, "Enable voice input (requires sox + OPENAI_API_KEY)")
 	flag.BoolVar(&f.wifiEnabled, "wifi", false, "Connect to ESP32 Marauder WiFi devboard")
+	flag.BoolVar(&f.noWiFi, "no-wifi", false, "Do not connect to the Marauder, even when enabled in config")
 	flag.StringVar(&f.marauderPortOverride, "marauder-port", "", "Marauder serial port (overrides config; e.g. /dev/ttyUSB0 for CP210x-bridged Marauders, /dev/ttyACM1 for ESP32-S2 native USB)")
 	flag.StringVar(&f.marauderBLEAddr, "marauder-ble", "",
 		"Connect directly to a standalone ESP32-Marauder devboard over BLE (skips the Flipper UART bridge entirely). Address is a hardware MAC on Linux/Windows, a CoreBluetooth UUID on macOS (run --ble-discover to find it), or a device LocalName like \"Marauder\". Mutually exclusive with --marauder-bridge. Not supported in WSL2.")
 	flag.BoolVar(&f.marauderBridge, "marauder-bridge", false,
 		"Drive the Marauder via the Flipper's USB-UART bridge (Marauder stacked on GPIO header — single USB cable). Disables flipper_* tools while active.")
+	flag.BoolVar(&f.marauderBridgeExitDTR, "marauder-bridge-exit-dtr", false,
+		"Custom FAP only: arm host DTR exit on Flipper bridge and lower it when the session closes. Requires bridge mode.")
 	flag.StringVar(&f.marauderBridgeCmd, "marauder-bridge-command", "",
 		"Override the Flipper CLI command that launches the UART bridge app (default: loader open \"USB-UART Bridge\").")
 	flag.BoolVar(&f.mcpMode, "mcp", false, "Run as MCP server (stdin/stdout)")
@@ -324,6 +332,12 @@ func applyConfigOverrides(cfg *config.Config, f *runFlags) {
 		// Bridge mode implies Marauder is wanted; --wifi can also be
 		// omitted with this flag set.
 		cfg.Marauder.Enabled = true
+	}
+	if f.marauderBridgeExitDTR {
+		cfg.Marauder.BridgeExitDTR = true
+	}
+	if f.noWiFi {
+		cfg.Marauder.Enabled = false
 	}
 	if f.marauderBridgeCmd != "" {
 		cfg.Marauder.BridgeCommand = f.marauderBridgeCmd
@@ -495,13 +509,14 @@ func setupMetrics(cfg *config.Config) *obs.Recorder {
 //
 // Failures to construct the sidecars are non-fatal — they emit a
 // warning and the MCP server still serves the remaining surface.
-func runMCPMode(ctx context.Context, cfg *config.Config, flip *flipper.Flipper, wifiEnabled bool) error {
-	var m *marauder.Marauder
-	if wifiEnabled || cfg.Marauder.Enabled {
-		m, _ = marauder.Connect(cfg.Marauder.Port, cfg.Marauder.BaudRate)
-		if m != nil {
-			defer m.Close()
-		}
+func runMCPMode(ctx context.Context, sh *signalHandler, cfg *config.Config, flip *flipper.Flipper, wifiEnabled bool) error {
+	m, err := connectMarauderForMCP(ctx, cfg, flip, wifiEnabled)
+	if err != nil {
+		return err
+	}
+	if m != nil {
+		cleanup := registerShutdownCleanup(sh, func() { _ = m.Close() })
+		defer cleanup()
 	}
 	srv := mcp.NewServer(flip, m)
 	cleanup := wireMCPSidecars(ctx, cfg, flip, srv)
@@ -1207,125 +1222,26 @@ func validateMarauderFlags(f *runFlags) error {
 	if f.marauderBLEAddr != "" && f.marauderBridge {
 		return fmt.Errorf("--marauder-ble and --marauder-bridge are mutually exclusive: pick one (BLE goes direct to a standalone devboard; bridge routes through the Flipper UART)")
 	}
+	if f.noWiFi {
+		switch {
+		case f.wifiEnabled:
+			return fmt.Errorf("--no-wifi conflicts with --wifi")
+		case f.marauderBridge:
+			return fmt.Errorf("--no-wifi conflicts with --marauder-bridge")
+		case f.marauderBLEAddr != "":
+			return fmt.Errorf("--no-wifi conflicts with --marauder-ble")
+		case f.marauderBridgeExitDTR:
+			return fmt.Errorf("--no-wifi conflicts with --marauder-bridge-exit-dtr")
+		}
+	}
 	return nil
 }
 
-// setupMarauder attempts to connect the ESP32 Marauder WiFi devboard
-// when enabled. Returns (hasMarauder, cleanup). A failed connection is
-// non-fatal — the operator can still drive the Flipper alone. When
-// cfg.Marauder.Bridge is set, the Marauder is reached via the Flipper's
-// USB-UART Bridge app (single-cable rig); otherwise the legacy
-// separate-cable path is used.
-func setupMarauder(ctx context.Context, cfg *config.Config, ai *agent.Agent, rec *obs.Recorder, flip *flipper.Flipper, wifiEnabled bool) (bool, func()) {
-	if !wifiEnabled && !cfg.Marauder.Enabled {
-		return false, func() {}
+func validateMarauderConfig(cfg *config.Config) error {
+	if cfg.Marauder.BridgeExitDTR && !cfg.Marauder.Bridge {
+		return fmt.Errorf("marauder.bridge_exit_dtr requires marauder.bridge")
 	}
-	if cfg.Marauder.Bridge {
-		return setupMarauderViaBridge(ctx, cfg, ai, flip, rec)
-	}
-	if strings.EqualFold(cfg.Marauder.Transport, "ble") {
-		return setupMarauderViaBLE(ctx, cfg, ai, rec)
-	}
-	statusInfo(fmt.Sprintf("Connecting to Marauder on %s%s%s...", bold, cfg.Marauder.Port, reset))
-	m, err := marauder.Connect(cfg.Marauder.Port, cfg.Marauder.BaudRate)
-	if err != nil {
-		statusWarn(fmt.Sprintf("Marauder unavailable: %v", err))
-		return false, func() {}
-	}
-	ai.SetMarauder(m)
-	if rec != nil {
-		rec.SetMarauderConnected(true)
-	}
-	statusOK("Marauder WiFi devboard connected")
-	return true, func() { m.Close() }
-}
-
-// setupMarauderViaBLE connects directly to a standalone ESP32-Marauder devboard
-// over its native BLE serial GATT layout. This path bypasses the Flipper UART
-// bridge entirely; no Flipper handle is touched, so the Flipper CLI (when
-// connected over its own transport) keeps working unchanged.
-//
-// The connect ctx applies to the scan + GATT discovery phase only — once
-// dialled, the BLE notifications drive Read independently of ctx.
-func setupMarauderViaBLE(ctx context.Context, cfg *config.Config, ai *agent.Agent, rec *obs.Recorder) (bool, func()) {
-	addr := cfg.Marauder.Port
-	if addr == "" {
-		statusWarn("Marauder BLE: address required (set marauder.port to a MAC/UUID/name or pass --marauder-ble <addr>)")
-		return false, func() {}
-	}
-	statusInfo(fmt.Sprintf("Connecting to Marauder over BLE at %sble://%s%s...", bold, addr, reset))
-	m, err := marauder.ConnectBLE(ctx, addr)
-	if err != nil {
-		statusWarn(fmt.Sprintf("Marauder BLE unavailable: %v", err))
-		return false, func() {}
-	}
-	ai.SetMarauder(m)
-	if rec != nil {
-		rec.SetMarauderConnected(true)
-	}
-	statusOK(fmt.Sprintf("Marauder devboard connected over BLE at %sble://%s%s", bold, addr, reset))
-	return true, func() { m.Close() }
-}
-
-// setupMarauderViaBridge launches the Flipper's USB-UART Bridge app and
-// reopens the same serial port as a Marauder client. On success the
-// passed *flipper.Flipper is suspended and all flipper_* CLI ops will
-// return ErrFlipperSuspended until process exit (auto-resume is out of
-// scope — see SPEC §8).
-//
-// Returns (true, cleanup) on success; (false, no-op) on failure.
-// Failure is non-fatal — the operator gets a warning and the agent runs
-// Flipper-only.
-func setupMarauderViaBridge(ctx context.Context, cfg *config.Config, ai *agent.Agent, flip *flipper.Flipper, rec *obs.Recorder) (bool, func()) {
-	if flip == nil {
-		statusWarn("Marauder bridge requires a connected Flipper — connect Flipper first or remove --marauder-bridge")
-		return false, func() {}
-	}
-	if flip.IsSuspended() {
-		statusWarn("Flipper already suspended — refusing to re-run bridge setup")
-		return false, func() {}
-	}
-	// Hybrid (BLE Flipper + USB-bridged Marauder) needs an explicit
-	// Marauder USB device — the Flipper isn't on USB so cfg.Serial.Port
-	// is irrelevant. Single-cable still uses cfg.Serial.Port.
-	hybrid := false
-	port := cfg.Serial.Port
-	if t := flip.Transport(); t != nil && t.Kind() == "ble" {
-		hybrid = true
-		if cfg.Marauder.Port == "" {
-			statusWarn("Hybrid bridge mode requires --marauder-port (Flipper is on BLE; Marauder USB device path must be set explicitly)")
-			return false, func() {}
-		}
-		port = cfg.Marauder.Port
-	}
-	statusInfo(fmt.Sprintf("Launching Flipper USB-UART Bridge for Marauder on %s%s%s...", bold, port, reset))
-	m, err := marauder.ConnectViaFlipper(
-		ctx,
-		flip,
-		port,
-		cfg.Marauder.BaudRate,
-		cfg.Marauder.BridgeCommand,
-		cfg.Marauder.BridgeSettle,
-		cfg.Marauder.BridgePortReopenTimeout,
-	)
-	if err != nil {
-		statusWarn(fmt.Sprintf("Marauder bridge: %v", err))
-		return false, func() {}
-	}
-	ai.SetMarauder(m)
-	if rec != nil {
-		rec.SetMarauderConnected(true)
-		if !hybrid {
-			rec.SetFlipperConnected(false) // CLI is gone for the rest of the session
-		}
-	}
-	if hybrid {
-		statusOK(fmt.Sprintf("Marauder via Flipper UART bridge on %s (Flipper CLI on BLE — both active)", port))
-	} else {
-		statusOK(fmt.Sprintf("Marauder via Flipper UART bridge on %s (Flipper CLI suspended)", port))
-		statusWarn("flipper_* tools disabled while UART bridge is active")
-	}
-	return true, func() { m.Close() }
+	return nil
 }
 
 // probeMarauderFirmware runs the `info` command and updates the web

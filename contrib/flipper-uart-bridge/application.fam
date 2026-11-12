@@ -1,0 +1,14 @@
+App(
+    appid="usb_uart_bridge",
+    name="USB-UART Bridge",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="usb_uart_bridge_app",
+    stack_size=2 * 1024,
+    sources=["*.c"],
+    fap_category="GPIO",
+    fap_icon="usb_uart_bridge.png",
+    fap_icon_assets="images",
+    fap_author="thewrz",
+    fap_version="1.0",
+    fap_description="Standalone USB-UART bridge for GPIO UART passthrough",
+)

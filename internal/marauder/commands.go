@@ -346,32 +346,6 @@ func (m *Marauder) BLESpamCtx(ctx context.Context, mode string, timeout time.Dur
 	return m.ExecCtx(ctx, "blespam -t "+clisafe.SanitizeArg(mode), timeout)
 }
 
-// --- Bluetooth Scanning ---
-
-// sniffBTTargets is the allowlist of valid `sniffbt -t` tokens. Anything
-// outside this set is rejected to prevent command injection via a free-form
-// string that would otherwise be concatenated into the CLI line.
-var sniffBTTargets = map[string]struct{}{
-	"airtag":  {},
-	"flipper": {},
-	"flock":   {},
-	"meta":    {},
-}
-
-// SniffBT sniffs Bluetooth advertisements for specific device types.
-// Valid targetType values: airtag, flipper, flock, meta.
-func (m *Marauder) SniffBT(targetType string, timeout time.Duration) (string, error) {
-	return m.SniffBTCtx(context.Background(), targetType, timeout)
-}
-
-// SniffBTCtx is the context-aware variant of SniffBT.
-func (m *Marauder) SniffBTCtx(ctx context.Context, targetType string, timeout time.Duration) (string, error) {
-	if _, ok := sniffBTTargets[targetType]; !ok {
-		return "", fmt.Errorf("invalid sniffbt target %q (valid: airtag, flipper, flock, meta)", targetType)
-	}
-	return m.ExecCtx(ctx, "sniffbt -t "+clisafe.SanitizeArg(targetType), timeout)
-}
-
 // SniffSkimmer sniffs for Bluetooth credit card skimmers.
 func (m *Marauder) SniffSkimmer(timeout time.Duration) (string, error) {
 	return m.SniffSkimmerCtx(context.Background(), timeout)
