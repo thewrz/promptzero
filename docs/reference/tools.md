@@ -542,7 +542,24 @@ and the agent won't mention them.
 
 **Passive capture:** `wifi_sniff_pmkid`, `wifi_sniff_beacon`,
 `wifi_sniff_deauth`, `wifi_sniff_probe`, `wifi_sniff_pwnagotchi`,
-`wifi_sniff_raw`, `wifi_sniff_bt`, `wifi_sniff_skimmer`.
+`wifi_sniff_raw`, `wifi_sniff_skimmer`.
+
+`wifi_sniff_bt` accepts `target_type: "all"` for unfiltered BLE advertisement
+discovery, or `airtag`, `flipper`, `flock`, `meta`. `duration_seconds` is an
+integer from 1 to 60 (default 30). The scan stops on expiry or cancellation.
+This discovers advertisements; it does not capture established Bluetooth links.
+
+The BLE scan stops any previous scan mode, continues past the firmware startup
+prompt, and waits for `stopscan` acknowledgement during cleanup. Queued replies
+are drained first; if input cannot settle within a bounded interval, the stop
+is still sent and the call reports uncertain cleanup. Marauder uses active BLE
+scanning, which can send scan requests.
+
+`wifi_read_cli` provides scoped Marauder diagnostics at Medium risk. It accepts
+exactly `help`, `info`, `stopscan`, `sniffbt`, or `sniffbt -t` followed by one of
+`airtag`, `flipper`, `flock`, `meta`. It uses the same duration bounds. Other
+commands, control characters, and command chaining are rejected before I/O;
+unrestricted CLI permissions are not required or changed.
 
 **Network recon (requires joining a network):** `wifi_join`,
 `wifi_ping_scan`, `wifi_arp_scan`, `wifi_port_scan`.

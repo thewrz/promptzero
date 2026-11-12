@@ -559,6 +559,9 @@ func optsFromSchema(schema []byte, required []string) []mcp.ToolOption {
 			Type        string          `json:"type"`
 			Description string          `json:"description"`
 			MinLength   *int            `json:"minLength"`
+			Minimum     *float64        `json:"minimum"`
+			Maximum     *float64        `json:"maximum"`
+			Default     json.RawMessage `json:"default"`
 			Enum        json.RawMessage `json:"enum"`
 			Items       json.RawMessage `json:"items"`
 		}
@@ -584,6 +587,16 @@ func optsFromSchema(schema []byte, required []string) []mcp.ToolOption {
 		case "string":
 			opts = append(opts, mcp.WithString(name, propOpts...))
 		case "integer", "number":
+			if prop.Minimum != nil {
+				propOpts = append(propOpts, mcp.Min(*prop.Minimum))
+			}
+			if prop.Maximum != nil {
+				propOpts = append(propOpts, mcp.Max(*prop.Maximum))
+			}
+			var defaultValue *float64
+			if json.Unmarshal(prop.Default, &defaultValue) == nil && defaultValue != nil {
+				propOpts = append(propOpts, mcp.DefaultNumber(*defaultValue))
+			}
 			opts = append(opts, mcp.WithNumber(name, propOpts...))
 		case "boolean":
 			opts = append(opts, mcp.WithBoolean(name, propOpts...))

@@ -636,24 +636,6 @@ func init() {
 	})
 
 	Register(Spec{
-		Name:        "wifi_sniff_bt",
-		Description: "Sniff for specific Bluetooth device advertisements. Valid target types: airtag, flipper, flock, meta.",
-		Schema: json.RawMessage(`{"type":"object","properties":{` +
-			`"target_type":{"type":"string","description":"Target device type: airtag, flipper, flock, meta"},` +
-			`"duration_seconds":{"type":"number","description":"Duration in seconds (default 30)"}}}`),
-		Required:  []string{"target_type"},
-		Risk:      risk.Medium,
-		Group:     GroupMarauderWiFi,
-		AgentOnly: false,
-		Handler: func(ctx context.Context, d *Deps, p map[string]any) (string, error) {
-			if err := d.RequireMarauder(); err != nil {
-				return "", err
-			}
-			return d.Marauder.SniffBTCtx(ctx, str(p, "target_type"), time.Duration(intOr(p, "duration_seconds", 30))*time.Second)
-		},
-	})
-
-	Register(Spec{
 		Name:        "wifi_sniff_skimmer",
 		Description: "Sniff for Bluetooth credit card skimmers nearby.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"duration_seconds":{"type":"number","description":"Duration in seconds (default 30)"}}}`),
