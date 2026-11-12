@@ -204,7 +204,7 @@ func TestValidationGuardedWrappers(t *testing.T) {
 	})
 
 	t.Run("SniffBT_valid", func(t *testing.T) {
-		got, err := wireCmd(t, func(m *Marauder) (string, error) {
+		got, err := wireBLECmd(t, func(m *Marauder) (string, error) {
 			return m.SniffBT("airtag", 100*time.Millisecond)
 		})
 		if err != nil {
@@ -223,7 +223,7 @@ func TestValidationGuardedWrappers(t *testing.T) {
 		}
 	})
 	t.Run("SniffBTCtx_valid", func(t *testing.T) {
-		got, err := wireCmd(t, func(m *Marauder) (string, error) {
+		got, err := wireBLECmd(t, func(m *Marauder) (string, error) {
 			return m.SniffBTCtx(context.Background(), "flipper", 100*time.Millisecond)
 		})
 		if err != nil {
